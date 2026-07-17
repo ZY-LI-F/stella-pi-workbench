@@ -17,10 +17,20 @@ interface RuntimeDependencies {
   readonly emitRuntimeSignal: (event: RuntimeSignal) => void;
 }
 
-interface StartOptions {
+export interface PiRuntimeStartOptions {
   readonly cwd: string;
   readonly trusted: boolean;
   readonly sessionPath?: string;
+  readonly sessionName?: string;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  readonly allowedTools?: readonly string[];
+  readonly appendSystemPrompt?: string;
+  readonly disableExtensions?: boolean;
+  readonly disableSkills?: boolean;
+  readonly disablePromptTemplates?: boolean;
+  readonly disableContextFiles?: boolean;
 }
 
 interface PendingRequest {
@@ -52,17 +62,27 @@ export class PiRpcRuntime {
     return this.#process !== null && this.#process.exitCode === null;
   }
 
-  async start(options: StartOptions): Promise<void> {
+  async start(options: PiRuntimeStartOptions): Promise<void> {
     const directory = await stat(options.cwd);
     if (!directory.isDirectory()) throw new Error(`项目路径不是目录: ${options.cwd}`);
     await this.stop();
 
     this.#dependencies.emitRuntimeSignal({ type: "runtime_starting", cwd: options.cwd });
-    const args = [
-      this.#dependencies.rpcEntryPath,
-      options.trusted ? "--approve" : "--no-approve",
-      ...(options.sessionPath ? ["--session", options.sessionPath] : []),
-    ];
+    const args: string[] = [this.#dependencies.rpcEntryPath, options.trusted ? "--approve" : "--no-approve"];
+    if (options.sessionPath) args.push("--session", options.sessionPath);
+    if (options.sessionName) args.push("--name", options.sessionName);
+    if (options.provider) args.push("--provider", options.provider);
+    if (options.model) args.push("--model", options.model);
+    if (options.thinking) args.push("--thinking", options.thinking);
+    if (options.allowedTools) {
+      if (options.allowedTools.length === 0) args.push("--no-tools");
+      else args.push("--tools", options.allowedTools.join(","));
+    }
+    if (options.appendSystemPrompt) args.push("--append-system-prompt", options.appendSystemPrompt);
+    if (options.disableExtensions) args.push("--no-extensions");
+    if (options.disableSkills) args.push("--no-skills");
+    if (options.disablePromptTemplates) args.push("--no-prompt-templates");
+    if (options.disableContextFiles) args.push("--no-context-files");
     const child = this.#dependencies.spawnProcess(this.#dependencies.executablePath, args, {
       cwd: options.cwd,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },

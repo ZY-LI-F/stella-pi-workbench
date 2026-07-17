@@ -60,7 +60,8 @@ test("packaged app boots its bundled Pi RPC runtime", async ({}, testInfo) => {
     }
 
     await expect(window.getByLabel(/Stella Pi Workbench/).first()).toBeVisible();
-    await expect(window.getByRole("button", { name: "新建任务" })).toBeVisible();
+    await expect(window.getByRole("button", { name: "新建看板任务" })).toBeVisible();
+    await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
     expect(await window.evaluate(() => window.location.protocol)).toBe("file:");
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();

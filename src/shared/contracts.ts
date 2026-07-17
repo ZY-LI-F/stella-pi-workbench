@@ -7,6 +7,14 @@ import type {
   RpcSessionState,
   SessionStats,
 } from "@earendil-works/pi-coding-agent";
+import type {
+  BoardBootstrap,
+  BoardBridgeEvent,
+  CreateTaskInput,
+  ManualTaskStatus,
+  ResolveGateInput,
+  UpdateTaskInput,
+} from "./kanban";
 
 type WithoutRequestId<T> = T extends { id?: string } ? Omit<T, "id"> : never;
 
@@ -173,7 +181,8 @@ export type RuntimeSignal =
 
 export type BridgeEvent =
   | { readonly source: "pi"; readonly payload: AgentSessionEvent | RpcExtensionUIRequest }
-  | { readonly source: "runtime"; readonly payload: RuntimeSignal };
+  | { readonly source: "runtime"; readonly payload: RuntimeSignal }
+  | { readonly source: "board"; readonly payload: BoardBridgeEvent };
 
 export interface StellaDesktopApi {
   initialize(): Promise<RuntimeBootstrap>;
@@ -184,6 +193,14 @@ export interface StellaDesktopApi {
   openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap>;
   revealPath(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;
+  boardInitialize(): Promise<BoardBootstrap>;
+  boardCreateTask(input: CreateTaskInput): Promise<BoardBootstrap>;
+  boardUpdateTask(input: UpdateTaskInput): Promise<BoardBootstrap>;
+  boardMoveTask(taskId: string, status: ManualTaskStatus): Promise<BoardBootstrap>;
+  boardDeleteTask(taskId: string): Promise<BoardBootstrap>;
+  boardDispatchTask(taskId: string): Promise<BoardBootstrap>;
+  boardResolveGate(input: ResolveGateInput): Promise<BoardBootstrap>;
+  boardAbortTask(taskId: string): Promise<BoardBootstrap>;
   windowAction(action: "minimize" | "maximize" | "close"): Promise<void>;
   onEvent(listener: (event: BridgeEvent) => void): () => void;
 }

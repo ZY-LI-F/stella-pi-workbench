@@ -26,8 +26,20 @@ import type {
   SessionTreeSummary,
   SlashCommandSummary,
 } from "../shared/contracts";
+import {
+  TASK_PRIORITIES,
+  type BoardBootstrap,
+  type CreateTaskInput,
+  type ManualTaskStatus,
+  type ResolveGateInput,
+  type UpdateTaskInput,
+} from "../shared/kanban";
+import { BUILTIN_ORCHESTRATION_CATALOG } from "../shared/orchestration-catalog";
+import { BoardService } from "./board-service";
+import { BoardStore } from "./board-store";
 import { PiRpcRuntime } from "./pi-rpc-runtime";
 import { StateStore } from "./state-store";
+import { WorkflowOrchestrator, type WorkflowRuntimeFactory } from "./workflow-orchestrator";
 
 const rpcEntryPath = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
 const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
@@ -102,8 +114,11 @@ function validatedExtensionResponse(value: unknown): PiExtensionResponse {
 let mainWindow: BrowserWindow | null = null;
 let currentProject: CurrentProject | null = null;
 let stateStore: StateStore;
+let boardStore: BoardStore;
+let boardService: BoardService;
+let workflowOrchestrator: WorkflowOrchestrator;
 
-function broadcast(source: "pi" | "runtime", payload: unknown): void {
+function broadcast(source: "pi" | "runtime" | "board", payload: unknown): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("stella:event", { source, payload });
 }
@@ -115,6 +130,93 @@ const runtime = new PiRpcRuntime({
   emitPiEvent: (event) => broadcast("pi", event),
   emitRuntimeSignal: (signal) => broadcast("runtime", signal),
 });
+
+const workflowRuntimeFactory: WorkflowRuntimeFactory = Object.freeze({
+  create: (callbacks: Parameters<WorkflowRuntimeFactory["create"]>[0]) => new PiRpcRuntime({
+    executablePath: process.execPath,
+    rpcEntryPath,
+    spawnProcess: (command, args, options) => spawn(command, [...args], options),
+    emitPiEvent: callbacks.emitPiEvent,
+    emitRuntimeSignal: callbacks.emitRuntimeSignal,
+  }),
+});
+
+function objectValue(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} 必须是对象`);
+  return value as Record<string, unknown>;
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} 必须是布尔值`);
+  return value;
+}
+
+function textValue(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} 必须是字符串`);
+  return value;
+}
+
+function validatedCreateTask(value: unknown): CreateTaskInput {
+  const input = objectValue(value, "创建任务参数");
+  const priority = textValue(input.priority, "priority");
+  if (!TASK_PRIORITIES.includes(priority as CreateTaskInput["priority"])) throw new Error(`无效优先级: ${priority}`);
+  return Object.freeze({
+    title: textValue(input.title, "title"),
+    description: textValue(input.description, "description"),
+    acceptanceCriteria: textValue(input.acceptanceCriteria, "acceptanceCriteria"),
+    priority: priority as CreateTaskInput["priority"],
+    projectPath: textValue(input.projectPath, "projectPath"),
+    projectName: textValue(input.projectName, "projectName"),
+    trusted: booleanValue(input.trusted, "trusted"),
+    workflowId: textValue(input.workflowId, "workflowId"),
+  });
+}
+
+function validatedUpdateTask(value: unknown): UpdateTaskInput {
+  const input = objectValue(value, "更新任务参数");
+  const priority = textValue(input.priority, "priority");
+  if (!TASK_PRIORITIES.includes(priority as UpdateTaskInput["priority"])) throw new Error(`无效优先级: ${priority}`);
+  return Object.freeze({
+    taskId: requiredString(input.taskId, "taskId"),
+    title: textValue(input.title, "title"),
+    description: textValue(input.description, "description"),
+    acceptanceCriteria: textValue(input.acceptanceCriteria, "acceptanceCriteria"),
+    priority: priority as UpdateTaskInput["priority"],
+    workflowId: textValue(input.workflowId, "workflowId"),
+  });
+}
+
+function validatedManualStatus(value: unknown): ManualTaskStatus {
+  if (value !== "planned" && value !== "blocked" && value !== "completed") {
+    throw new Error(`不支持的手动任务状态: ${String(value)}`);
+  }
+  return value;
+}
+
+function validatedGate(value: unknown): ResolveGateInput {
+  const input = objectValue(value, "人工关卡参数");
+  if (input.decision !== "approve" && input.decision !== "reject") throw new Error("decision 必须是 approve 或 reject");
+  return Object.freeze({
+    taskId: requiredString(input.taskId, "taskId"),
+    decision: input.decision,
+    comment: textValue(input.comment, "comment"),
+  });
+}
+
+async function createBoardTaskForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  if (!currentProject) throw new Error("尚未选择项目");
+  const input = validatedCreateTask(value);
+  if (resolve(input.projectPath) !== currentProject.cwd) {
+    throw new Error("任务项目必须与当前主进程工作区一致");
+  }
+  const project = await getProjectMeta(currentProject);
+  return boardService.createTask(Object.freeze({
+    ...input,
+    projectPath: project.cwd,
+    projectName: project.name,
+    trusted: project.trusted,
+  }));
+}
 
 function dataFromResponse<T>(response: PiResponse, command: string): T {
   if (!response.success) throw new Error(response.error);
@@ -349,6 +451,24 @@ function registerIpcHandlers(): void {
     }
     await shell.openExternal(parsed.toString());
   });
+  ipcMain.handle("stella:board:initialize", () => boardService.bootstrap());
+  ipcMain.handle("stella:board:create-task", (_event, input: unknown) => createBoardTaskForCurrentProject(input));
+  ipcMain.handle("stella:board:update-task", (_event, input: unknown) => boardService.updateTask(validatedUpdateTask(input)));
+  ipcMain.handle("stella:board:move-task", (_event, taskId: unknown, status: unknown) =>
+    boardService.moveTask(requiredString(taskId, "taskId"), validatedManualStatus(status)),
+  );
+  ipcMain.handle("stella:board:delete-task", (_event, taskId: unknown) =>
+    boardService.deleteTask(requiredString(taskId, "taskId")),
+  );
+  ipcMain.handle("stella:board:dispatch-task", (_event, taskId: unknown) =>
+    workflowOrchestrator.dispatch(requiredString(taskId, "taskId")),
+  );
+  ipcMain.handle("stella:board:resolve-gate", (_event, input: unknown) =>
+    workflowOrchestrator.resolveGate(validatedGate(input)),
+  );
+  ipcMain.handle("stella:board:abort-task", (_event, taskId: unknown) =>
+    workflowOrchestrator.abort(requiredString(taskId, "taskId")),
+  );
   ipcMain.handle("stella:window-action", (_event, action: unknown) => {
     if (!mainWindow) return;
     if (action === "minimize") mainWindow.minimize();
@@ -398,19 +518,46 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   stateStore = new StateStore(join(app.getPath("userData"), "stella-state.json"));
+  boardStore = new BoardStore(join(app.getPath("userData"), "board", "board.json"));
+  await boardStore.initialize();
+  const emitSnapshot = (bootstrap: BoardBootstrap): void => broadcast("board", { type: "snapshot", bootstrap });
+  boardService = new BoardService({
+    repository: boardStore,
+    catalog: BUILTIN_ORCHESTRATION_CATALOG,
+    emitChanged: emitSnapshot,
+  });
+  workflowOrchestrator = new WorkflowOrchestrator({
+    repository: boardStore,
+    catalog: BUILTIN_ORCHESTRATION_CATALOG,
+    runtimeFactory: workflowRuntimeFactory,
+    emitBoardEvent: (event) => broadcast("board", event),
+  });
   registerIpcHandlers();
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+}).catch((error: unknown) => {
+  const message = error instanceof Error ? error.stack ?? error.message : String(error);
+  dialog.showErrorBox("Stella 启动失败", message);
+  app.quit();
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  void runtime.stop();
+let shutdownStarted = false;
+let shutdownComplete = false;
+app.on("before-quit", (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  void Promise.all([runtime.stop(), workflowOrchestrator?.shutdown()]).finally(() => {
+    shutdownComplete = true;
+    app.quit();
+  });
 });

@@ -1,0 +1,91 @@
+import type { DragEvent } from "react";
+import { Activity, AlertTriangle, Bot, Clock3, Play, ShieldAlert } from "lucide-react";
+import {
+  activeStep,
+  workflowProgress,
+  type BoardBridgeEvent,
+  type KanbanTask,
+  type TaskActivity,
+  type WorkflowDefinition,
+  type WorkflowRun,
+} from "@shared/kanban";
+import { PRIORITY_LABEL, STATUS_LABEL, formatRelativeTime } from "./kanban-format";
+
+interface TaskCardProps {
+  readonly task: KanbanTask;
+  readonly workflow?: WorkflowDefinition;
+  readonly run?: WorkflowRun;
+  readonly activities: readonly TaskActivity[];
+  readonly liveEvent?: Extract<BoardBridgeEvent, { type: "agent-event" }>;
+  readonly busy: boolean;
+  readonly onOpen: () => void;
+  readonly onDispatch: () => void;
+  readonly onDragStart: (event: DragEvent<HTMLElement>) => void;
+}
+
+function trailClass(status: WorkflowRun["steps"][number]["status"]): string {
+  if (status === "succeeded") return "is-complete";
+  if (status === "running") return "is-active";
+  if (status === "waiting") return "is-gate";
+  if (status === "failed" || status === "interrupted") return "is-failed";
+  return "";
+}
+
+export function TaskCard({ task, workflow, run, activities, liveEvent, busy, onOpen, onDispatch, onDragStart }: TaskCardProps) {
+  const step = activeStep(run);
+  const latestActivity = activities.at(-1);
+  const canDispatch = !task.activeRunId && task.status !== "completed";
+  return (
+    <article
+      className={`kanban-card priority-${task.priority} status-${task.status}`}
+      draggable={!task.activeRunId}
+      onDragStart={onDragStart}
+      data-task-id={task.id}
+    >
+      <div className="kanban-card__edge" />
+      <div className="kanban-card__topline">
+        <span className={`priority-badge priority-badge--${task.priority}`}>{PRIORITY_LABEL[task.priority]}</span>
+        <span className="kanban-card__project">{task.projectName}</span>
+        <span className={`status-chip status-chip--${task.status}`}>{STATUS_LABEL[task.status]}</span>
+      </div>
+      <button type="button" className="kanban-card__title" onClick={onOpen}>{task.title}</button>
+      {task.description && <p className="kanban-card__description">{task.description}</p>}
+
+      <div className="kanban-card__workflow">
+        <span>{workflow?.shortName ?? task.workflowId}</span>
+        {run && <strong>{workflowProgress(run)}%</strong>}
+      </div>
+
+      <div className="star-trail" aria-label={run ? `流程进度 ${workflowProgress(run)}%` : "尚未分发"}>
+        {run ? run.steps.map((runStep, index) => (
+          <span className={`star-trail__node ${trailClass(runStep.status)}`} key={runStep.id} title={`${runStep.name} · ${runStep.status}`}>
+            <i />{index < run.steps.length - 1 && <b />}
+          </span>
+        )) : workflow?.steps.map((workflowStep, index) => (
+          <span className="star-trail__node" key={workflowStep.id} title={workflowStep.name}>
+            <i />{index < workflow.steps.length - 1 && <b />}
+          </span>
+        ))}
+        {liveEvent && <span className="star-trail__signal" title={liveEvent.eventType}><Activity size={10} /></span>}
+      </div>
+
+      {task.blockedReason && <div className="kanban-card__alert"><AlertTriangle size={13} /><span>{task.blockedReason}</span></div>}
+      {step && (
+        <div className="kanban-card__agent">
+          {step.stepKind === "human-gate" ? <ShieldAlert size={14} /> : <Bot size={14} />}
+          <span><small>{step.stepKind === "human-gate" ? "人工关卡" : "当前 Agent"}</small><strong>{step.name}</strong></span>
+          {step.status === "running" && <i className="agent-pulse" />}
+        </div>
+      )}
+
+      <div className="kanban-card__footer">
+        <span title={latestActivity?.summary}><Clock3 size={11} />{formatRelativeTime(latestActivity?.createdAt ?? task.updatedAt)}</span>
+        {canDispatch && (
+          <button type="button" onClick={(event) => { event.stopPropagation(); onDispatch(); }} disabled={busy} aria-label={`分发任务 ${task.title}`}>
+            <Play size={12} fill="currentColor" />分发
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}

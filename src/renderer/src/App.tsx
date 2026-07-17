@@ -4,6 +4,8 @@ import {
   FileOutput,
   FolderOpen,
   GitFork,
+  LayoutDashboard,
+  MessagesSquare,
   Plus,
   Settings2,
   TerminalSquare,
@@ -18,6 +20,7 @@ import type {
   StellaDesktopApi,
 } from "@shared/contracts";
 import { usePiRuntime } from "./hooks/use-pi-runtime";
+import { useKanban } from "./hooks/use-kanban";
 import { usePreferences } from "./hooks/use-preferences";
 import type { SkinPreference } from "./lib/skins";
 import chenxiArtwork from "./assets/skins/chenxi.png";
@@ -30,12 +33,13 @@ import { ExtensionDialog } from "./components/ExtensionDialog";
 import { Inspector } from "./components/Inspector";
 import { ProjectTrustDialog } from "./components/ProjectTrustDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, type WorkspaceView } from "./components/Sidebar";
 import { TerminalDrawer, type BashResult } from "./components/TerminalDrawer";
 import { TextPromptDialog } from "./components/TextPromptDialog";
 import { ToastStack } from "./components/ToastStack";
 import { Topbar } from "./components/Topbar";
 import { WindowControls } from "./components/WindowControls";
+import { KanbanWorkspace } from "./features/kanban/KanbanWorkspace";
 
 interface AppProps {
   readonly api: StellaDesktopApi;
@@ -118,6 +122,7 @@ function LoadingScreen({ skin }: { readonly skin: SkinPreference }) {
 
 export function App({ api }: AppProps) {
   const controller = usePiRuntime(api);
+  const kanban = useKanban(api);
   const { state } = controller;
   const [preferences, setPreferences] = usePreferences();
   const [draft, setDraft] = useState("");
@@ -127,6 +132,8 @@ export function App({ api }: AppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("kanban");
+  const [createTaskRequest, setCreateTaskRequest] = useState(0);
   const [projectTrust, setProjectTrust] = useState<ProjectSelection | null>(null);
   const [queueMode, setQueueMode] = useState<"steer" | "followUp">(
     preferences.defaultQueueMode,
@@ -154,8 +161,14 @@ export function App({ api }: AppProps) {
       controller.notify("新建会话已由 Pi 扩展取消", "warning");
       return;
     }
+    setWorkspaceView("chat");
     setDraft("");
     focusComposer();
+  };
+
+  const newTask = () => {
+    setWorkspaceView("kanban");
+    setCreateTaskRequest((value) => value + 1);
   };
 
   const chooseProject = async () => {
@@ -177,6 +190,7 @@ export function App({ api }: AppProps) {
       controller.notify("切换会话已由 Pi 扩展取消", "warning");
       return;
     }
+    setWorkspaceView("chat");
     setSidebarOpen(false);
   };
 
@@ -232,10 +246,13 @@ export function App({ api }: AppProps) {
 
   const paletteActions = useMemo<readonly PaletteAction[]>(
     () => [
+      { id: "kanban", label: "打开任务看板", detail: "监督固定 Agent 团队与流程", icon: LayoutDashboard, run: () => setWorkspaceView("kanban") },
+      { id: "task", label: "新建看板任务", detail: "选择固定流程并分发", icon: Plus, run: newTask },
+      { id: "chat", label: "返回当前会话", detail: "与 Pi 直接对话", icon: MessagesSquare, run: () => setWorkspaceView("chat") },
       { id: "new", label: "新建会话", detail: "开始一个干净的 Pi 会话", icon: Plus, run: () => void newSession() },
       { id: "project", label: "打开项目", detail: "选择新的本地工作目录", icon: FolderOpen, run: () => void chooseProject() },
       { id: "terminal", label: "运行命令", detail: "打开本地命令抽屉", icon: TerminalSquare, run: () => setTerminalOpen(true) },
-      { id: "tree", label: "查看会话图谱", detail: "检查工具活动与分支结构", icon: GitFork, run: () => setInspectorOpen(true) },
+      { id: "tree", label: "查看会话图谱", detail: "检查工具活动与分支结构", icon: GitFork, run: () => { setWorkspaceView("chat"); setInspectorOpen(true); } },
       { id: "compact", label: "压缩上下文", detail: "生成摘要并释放模型窗口", icon: Archive, run: () => void compact() },
       { id: "export", label: "导出 HTML", detail: "保存当前会话记录", icon: FileOutput, run: () => void exportSession() },
       { id: "settings", label: "偏好设置", detail: "外观、队列和 Pi 行为", icon: Settings2, run: () => setSettingsOpen(true) },
@@ -252,11 +269,13 @@ export function App({ api }: AppProps) {
       }
       if (ctrl && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
-        void newSession();
+        if (workspaceView === "kanban") newTask();
+        else void newSession();
       }
       if (ctrl && event.key.toLocaleLowerCase() === "l") {
         event.preventDefault();
-        focusComposer();
+        if (workspaceView === "kanban") document.querySelector<HTMLInputElement>(".kanban-search input")?.focus();
+        else focusComposer();
       }
       if (ctrl && event.key === "`") {
         event.preventDefault();
@@ -264,12 +283,17 @@ export function App({ api }: AppProps) {
       }
       if (ctrl && event.key.toLocaleLowerCase() === "i") {
         event.preventDefault();
-        setInspectorOpen((value) => !value);
+        if (workspaceView === "kanban") {
+          setWorkspaceView("chat");
+          setInspectorOpen(true);
+        } else {
+          setInspectorOpen((value) => !value);
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  });
+  }, [workspaceView]);
 
   if (state.phase === "loading") return <LoadingScreen skin={preferences.skin} />;
 
@@ -295,7 +319,7 @@ export function App({ api }: AppProps) {
   const bootstrap = state.bootstrap;
 
   return (
-    <div className={`app-shell ${inspectorOpen ? "has-inspector" : ""} ${terminalOpen ? "has-terminal" : ""}`}>
+    <div className={`app-shell app-shell--${workspaceView} ${workspaceView === "chat" && inspectorOpen ? "has-inspector" : ""} ${terminalOpen ? "has-terminal" : ""}`}>
       <SkinBackdrop skin={preferences.skin} />
       <div className="titlebar-drag" />
       <WindowControls api={api} />
@@ -303,8 +327,11 @@ export function App({ api }: AppProps) {
         bootstrap={bootstrap}
         skin={preferences.skin}
         open={sidebarOpen}
+        activeView={workspaceView}
         onClose={() => setSidebarOpen(false)}
         onNewSession={() => void newSession()}
+        onNewTask={newTask}
+        onSwitchView={(view) => { setWorkspaceView(view); setSidebarOpen(false); }}
         onChooseProject={() => void chooseProject()}
         onOpenRecentProject={(project) => void openRecentProject(project)}
         onSwitchSession={(session) => void switchSession(session)}
@@ -314,7 +341,7 @@ export function App({ api }: AppProps) {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <main className="workspace">
+      {workspaceView === "chat" ? <main className="workspace">
         <Topbar
           bootstrap={bootstrap}
           streaming={state.streaming}
@@ -354,9 +381,19 @@ export function App({ api }: AppProps) {
           onOpenPalette={() => setPaletteOpen(true)}
           onError={(message) => controller.notify(message, "error")}
         />
-      </main>
+      </main> : (
+        <KanbanWorkspace
+          api={api}
+          controller={kanban}
+          project={bootstrap.project}
+          createRequest={createTaskRequest}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenTerminal={() => setTerminalOpen(true)}
+          onError={(message) => controller.notify(message, "error")}
+        />
+      )}
 
-      <Inspector
+      {workspaceView === "chat" && <Inspector
         bootstrap={bootstrap}
         open={inspectorOpen}
         tools={state.tools}
@@ -369,7 +406,7 @@ export function App({ api }: AppProps) {
         onClone={() => void cloneSession()}
         onRename={() => setRenameOpen(true)}
         onFork={(entryId) => void fork(entryId)}
-      />
+      />}
 
       <TerminalDrawer
         open={terminalOpen}

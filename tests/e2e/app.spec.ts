@@ -1,8 +1,8 @@
 import { expect, test, _electron as electron } from "@playwright/test";
 
-test("launches the real Pi RPC workbench and exposes core controls", async () => {
+test("launches the real Pi RPC workbench and exposes core controls", async ({}, testInfo) => {
   const electronApp = await electron.launch({
-    args: ["."],
+    args: [".", `--user-data-dir=${testInfo.outputPath("electron-user-data")}`],
     cwd: process.cwd(),
   });
   try {
@@ -20,13 +20,36 @@ test("launches the real Pi RPC workbench and exposes core controls", async () =>
     }
 
     await expect(window.getByLabel(/Stella Pi Workbench/).first()).toBeVisible();
-    await expect(window.getByRole("button", { name: "新建任务" })).toBeVisible();
-    await expect(window.getByLabel("给 Pi 的消息")).toBeVisible();
+    await expect(window.getByRole("button", { name: "新建看板任务" })).toBeVisible();
+    await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
     await expect(window.getByText("Stella", { exact: true }).first()).toBeVisible();
-    await expect(window.getByLabel("模型")).toBeVisible();
-    await expect(window.getByLabel("思考级别")).toBeVisible();
     await expect(window.getByLabel("最小化")).toBeVisible();
     await window.bringToFront();
+
+    await window.getByRole("button", { name: "新建任务", exact: true }).click();
+    const taskDialog = window.getByRole("dialog", { name: "创建看板任务" });
+    await expect(taskDialog).toBeVisible();
+    await taskDialog.getByLabel(/任务标题/).fill("验证固定 Agent 看板");
+    await taskDialog.getByLabel("任务说明").fill("确认任务卡片、拖放和编排目录交互。");
+    await taskDialog.getByLabel("验收标准").fill("任务能在看板中持久化并显示流程星轨。");
+    await taskDialog.getByRole("button", { name: /代码审阅/ }).click();
+    await taskDialog.getByRole("button", { name: "创建任务", exact: true }).click();
+    const taskCard = window.locator(".kanban-card", { hasText: "验证固定 Agent 看板" });
+    await expect(taskCard).toBeVisible();
+
+    await taskCard.dragTo(window.locator(".kanban-lane--blocked"));
+    await expect(window.locator(".kanban-lane--blocked").getByText("验证固定 Agent 看板", { exact: true })).toBeVisible();
+    await taskCard.dragTo(window.locator(".kanban-lane--planned"));
+    await expect(window.locator(".kanban-lane--planned").getByText("验证固定 Agent 看板", { exact: true })).toBeVisible();
+
+    await window.getByRole("button", { name: "编排目录" }).click();
+    const catalog = window.getByRole("dialog", { name: "固定编排目录" });
+    await expect(catalog.getByText("项目侦察员", { exact: true })).toBeVisible();
+    await catalog.getByRole("tab", { name: "团队" }).click();
+    await expect(catalog.getByText("交付小队", { exact: true })).toBeVisible();
+    await catalog.getByRole("tab", { name: "流程" }).click();
+    await expect(catalog.getByText("功能交付流程", { exact: true })).toBeVisible();
+    await window.keyboard.press("Escape");
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     let settings = window.getByRole("dialog", { name: "偏好设置" });
@@ -38,7 +61,7 @@ test("launches the real Pi RPC workbench and exposes core controls", async () =>
     await window.keyboard.press("Escape");
     await expect(settings).toBeHidden();
     await expect(window.locator("html")).toHaveAttribute("data-skin", "stella");
-    await window.screenshot({ path: "docs/stella-home.png", fullPage: true, animations: "disabled" });
+    await window.screenshot({ path: "docs/kanban-stella.png", fullPage: true, animations: "disabled" });
 
     await window.keyboard.press("Control+K");
     const palette = window.getByRole("dialog", { name: "搜索与命令" });
@@ -65,7 +88,7 @@ test("launches the real Pi RPC workbench and exposes core controls", async () =>
     await expect(window.locator("html")).toHaveAttribute("data-skin", "chenxi");
     await window.keyboard.press("Escape");
     await expect(settings).toBeHidden();
-    await window.screenshot({ path: "docs/chenxi-home.png", fullPage: true, animations: "disabled" });
+    await window.screenshot({ path: "docs/kanban-chenxi.png", fullPage: true, animations: "disabled" });
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     settings = window.getByRole("dialog", { name: "偏好设置" });
@@ -73,7 +96,7 @@ test("launches the real Pi RPC workbench and exposes core controls", async () =>
     await expect(window.locator("html")).toHaveAttribute("data-skin", "dingyang");
     await window.keyboard.press("Escape");
     await expect(settings).toBeHidden();
-    await window.screenshot({ path: "docs/dingyang-home.png", fullPage: true, animations: "disabled" });
+    await window.screenshot({ path: "docs/kanban-dingyang.png", fullPage: true, animations: "disabled" });
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     settings = window.getByRole("dialog", { name: "偏好设置" });
@@ -81,6 +104,12 @@ test("launches the real Pi RPC workbench and exposes core controls", async () =>
     await expect(window.locator("html")).toHaveAttribute("data-skin", "stella");
     await window.keyboard.press("Escape");
     await expect(settings).toBeHidden();
+
+    await window.getByRole("button", { name: "当前会话" }).click();
+    await expect(window.getByLabel("给 Pi 的消息")).toBeVisible();
+    await expect(window.getByLabel("模型")).toBeVisible();
+    await expect(window.getByLabel("思考级别")).toBeVisible();
+    await window.screenshot({ path: "docs/stella-home.png", fullPage: true, animations: "disabled" });
 
     const inspector = window.locator(".inspector.is-open");
     await inspector.getByRole("button", { name: "活动", exact: true }).click();

@@ -5,6 +5,8 @@ import {
   Command,
   Folder,
   GitFork,
+  LayoutDashboard,
+  MessagesSquare,
   PanelLeftClose,
   Search,
   Settings2,
@@ -18,8 +20,11 @@ interface SidebarProps {
   readonly bootstrap: RuntimeBootstrap;
   readonly skin: SkinPreference;
   readonly open: boolean;
+  readonly activeView: WorkspaceView;
   readonly onClose: () => void;
   readonly onNewSession: () => void;
+  readonly onNewTask: () => void;
+  readonly onSwitchView: (view: WorkspaceView) => void;
   readonly onChooseProject: () => void;
   readonly onOpenRecentProject: (project: RecentProject) => void;
   readonly onSwitchSession: (session: SessionSummary) => void;
@@ -28,6 +33,8 @@ interface SidebarProps {
   readonly onOpenInspector: () => void;
   readonly onOpenSettings: () => void;
 }
+
+export type WorkspaceView = "chat" | "kanban";
 
 function relativeGroup(dateString: string): "今天" | "过去 7 天" | "更早" {
   const now = new Date();
@@ -81,8 +88,11 @@ export function Sidebar({
   bootstrap,
   skin,
   open,
+  activeView,
   onClose,
   onNewSession,
+  onNewTask,
+  onSwitchView,
   onChooseProject,
   onOpenRecentProject,
   onSwitchSession,
@@ -114,13 +124,21 @@ export function Sidebar({
           </button>
         </div>
 
-        <button type="button" className="new-session-button" onClick={onNewSession}>
+        <button type="button" className="new-session-button" onClick={activeView === "kanban" ? onNewTask : onNewSession}>
           <CirclePlus size={18} />
-          <span>新建任务</span>
+          <span>{activeView === "kanban" ? "新建看板任务" : "新建会话"}</span>
           <kbd>Ctrl N</kbd>
         </button>
 
         <nav className="quick-nav" aria-label="工作区工具">
+          <button type="button" className={activeView === "kanban" ? "is-active" : ""} onClick={() => onSwitchView("kanban")}>
+            <LayoutDashboard size={16} />
+            <span>任务看板</span>
+          </button>
+          <button type="button" className={activeView === "chat" ? "is-active" : ""} onClick={() => onSwitchView("chat")}>
+            <MessagesSquare size={16} />
+            <span>当前会话</span>
+          </button>
           <button type="button" onClick={onOpenPalette}>
             <Search size={16} />
             <span>搜索与命令</span>
