@@ -1,0 +1,362 @@
+:root {
+  color-scheme: dark;
+  --font-body: "Manrope Variable", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-signature: "Marck Script", "Segoe Script", "Snell Roundhand", cursive;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+  --night-950: #080b17;
+  --night-900: #0c1021;
+  --night-850: #11162a;
+  --night-800: #171c31;
+  --night-750: #1d233a;
+  --moon-50: #faf7f3;
+  --moon-100: #eeeaf2;
+  --moon-300: #c7c3d2;
+  --moon-500: #9793a8;
+  --iris-300: #c2b7ff;
+  --iris-400: #a998ff;
+  --iris-500: #8d7cf0;
+  --apricot-300: #ffc7a5;
+  --apricot-400: #ffad7a;
+  --aqua-300: #8cddd5;
+  --rose-400: #f08da9;
+  --success: #78d7b0;
+  --warning: #f2bf73;
+  --danger: #ff8391;
+
+  --app-bg: var(--night-900);
+  --panel: rgba(16, 21, 40, 0.82);
+  --panel-solid: #11162a;
+  --panel-elevated: rgba(25, 30, 52, 0.96);
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-hover: rgba(255, 255, 255, 0.075);
+  --surface-active: rgba(169, 152, 255, 0.13);
+  --border: rgba(232, 227, 246, 0.09);
+  --border-strong: rgba(232, 227, 246, 0.16);
+  --text: #f3eff7;
+  --text-soft: #c6c2d1;
+  --text-muted: #8f91a5;
+  --text-faint: #666a80;
+  --accent: var(--iris-400);
+  --accent-strong: var(--iris-300);
+  --accent-warm: var(--apricot-400);
+  --accent-soft: rgba(169, 152, 255, 0.13);
+  --shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+  --shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.2);
+  --blur: blur(24px) saturate(120%);
+
+  --sidebar-width: 274px;
+  --inspector-width: 324px;
+  --topbar-height: 64px;
+  --composer-gap: 18px;
+  --message-gap: 30px;
+  --radius-xs: 7px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 26px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #ececf3;
+  --panel: rgba(248, 247, 250, 0.83);
+  --panel-solid: #f5f3f7;
+  --panel-elevated: rgba(255, 255, 255, 0.97);
+  --surface: rgba(42, 40, 62, 0.05);
+  --surface-hover: rgba(42, 40, 62, 0.085);
+  --surface-active: rgba(116, 92, 216, 0.11);
+  --border: rgba(49, 45, 72, 0.1);
+  --border-strong: rgba(49, 45, 72, 0.17);
+  --text: #282638;
+  --text-soft: #56536a;
+  --text-muted: #7d798d;
+  --text-faint: #a19daa;
+  --accent: #705fce;
+  --accent-strong: #5f4fc0;
+  --accent-warm: #c87042;
+  --accent-soft: rgba(112, 95, 206, 0.11);
+  --shadow: 0 24px 70px rgba(69, 61, 96, 0.16);
+  --shadow-soft: 0 12px 30px rgba(69, 61, 96, 0.1);
+}
+
+/* 晨曦：Rosé Pine Dawn 的柔和明度关系，延展为纸艺晨雾。 */
+:root[data-skin="chenxi"] {
+  --night-950: #14121f;
+  --night-900: #191724;
+  --night-850: #1f1d2e;
+  --night-800: #26233a;
+  --night-750: #2f2b45;
+  --moon-50: #fffaf3;
+  --moon-100: #f2e9e1;
+  --moon-300: #c8c2d2;
+  --moon-500: #908caa;
+  --iris-300: #d7c1ee;
+  --iris-400: #c4a7e7;
+  --iris-500: #9b7fc5;
+  --apricot-300: #f9d59c;
+  --apricot-400: #f6c177;
+  --aqua-300: #9ccfd8;
+  --rose-400: #eb6f92;
+  --success: #9ccfd8;
+  --warning: #f6c177;
+  --danger: #eb6f92;
+
+  --app-bg: #191724;
+  --panel: rgba(31, 29, 46, 0.82);
+  --panel-solid: #1f1d2e;
+  --panel-elevated: rgba(38, 35, 58, 0.96);
+  --surface: rgba(255, 250, 243, 0.055);
+  --surface-hover: rgba(255, 250, 243, 0.09);
+  --surface-active: rgba(196, 167, 231, 0.15);
+  --border: rgba(224, 222, 244, 0.1);
+  --border-strong: rgba(224, 222, 244, 0.18);
+  --text: #e0def4;
+  --text-soft: #c9c5dc;
+  --text-muted: #908caa;
+  --text-faint: #6e6a86;
+  --accent: #c4a7e7;
+  --accent-strong: #d7c1ee;
+  --accent-warm: #f6c177;
+  --accent-soft: rgba(196, 167, 231, 0.14);
+  --shadow: 0 28px 80px rgba(18, 14, 28, 0.42);
+  --shadow-soft: 0 14px 34px rgba(18, 14, 28, 0.24);
+  --blur: blur(30px) saturate(112%);
+  --radius-xs: 9px;
+  --radius-sm: 13px;
+  --radius-md: 18px;
+  --radius-lg: 25px;
+  --radius-xl: 32px;
+}
+
+:root[data-skin="chenxi"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #faf4ed;
+  --panel: rgba(255, 250, 243, 0.76);
+  --panel-solid: #fffaf3;
+  --panel-elevated: rgba(255, 250, 243, 0.96);
+  --surface: rgba(87, 82, 121, 0.055);
+  --surface-hover: rgba(87, 82, 121, 0.09);
+  --surface-active: rgba(215, 130, 126, 0.13);
+  --border: rgba(87, 82, 121, 0.1);
+  --border-strong: rgba(87, 82, 121, 0.18);
+  --text: #575279;
+  --text-soft: #6e688b;
+  --text-muted: #797593;
+  --text-faint: #9893a5;
+  --accent: #b4637a;
+  --accent-strong: #9d5369;
+  --accent-warm: #ea9d34;
+  --accent-soft: rgba(180, 99, 122, 0.11);
+  --aqua-300: #56949f;
+  --rose-400: #d7827e;
+  --success: #56949f;
+  --warning: #ea9d34;
+  --danger: #b4637a;
+  --shadow: 0 28px 80px rgba(112, 84, 73, 0.17);
+  --shadow-soft: 0 14px 34px rgba(112, 84, 73, 0.11);
+}
+
+/* 定阳：Solarized 明暗对称关系，配合日晷制图式构成。 */
+:root[data-skin="dingyang"] {
+  --night-950: #001b20;
+  --night-900: #002b36;
+  --night-850: #073642;
+  --night-800: #0d404a;
+  --night-750: #164b55;
+  --moon-50: #fdf6e3;
+  --moon-100: #eee8d5;
+  --moon-300: #93a1a1;
+  --moon-500: #657b83;
+  --iris-300: #d4a818;
+  --iris-400: #b58900;
+  --iris-500: #8e6d00;
+  --apricot-300: #e37a45;
+  --apricot-400: #cb4b16;
+  --aqua-300: #2aa198;
+  --rose-400: #d33682;
+  --success: #859900;
+  --warning: #b58900;
+  --danger: #dc322f;
+
+  --app-bg: #001f26;
+  --panel: rgba(0, 36, 43, 0.89);
+  --panel-solid: #002b36;
+  --panel-elevated: rgba(7, 54, 66, 0.97);
+  --surface: rgba(238, 232, 213, 0.045);
+  --surface-hover: rgba(238, 232, 213, 0.08);
+  --surface-active: rgba(181, 137, 0, 0.15);
+  --border: rgba(181, 137, 0, 0.16);
+  --border-strong: rgba(181, 137, 0, 0.29);
+  --text: #eee8d5;
+  --text-soft: #c7c6b6;
+  --text-muted: #93a1a1;
+  --text-faint: #657b83;
+  --accent: #b58900;
+  --accent-strong: #d4a818;
+  --accent-warm: #cb4b16;
+  --accent-soft: rgba(181, 137, 0, 0.13);
+  --shadow: 0 24px 64px rgba(0, 12, 14, 0.55);
+  --shadow-soft: 0 10px 26px rgba(0, 12, 14, 0.34);
+  --blur: blur(10px) saturate(90%);
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
+:root[data-skin="dingyang"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #eee8d5;
+  --panel: rgba(253, 246, 227, 0.88);
+  --panel-solid: #fdf6e3;
+  --panel-elevated: rgba(253, 246, 227, 0.98);
+  --surface: rgba(0, 43, 54, 0.045);
+  --surface-hover: rgba(0, 43, 54, 0.075);
+  --surface-active: rgba(181, 137, 0, 0.13);
+  --border: rgba(0, 43, 54, 0.12);
+  --border-strong: rgba(181, 137, 0, 0.34);
+  --text: #073642;
+  --text-soft: #385862;
+  --text-muted: #586e75;
+  --text-faint: #839496;
+  --accent: #9d7600;
+  --accent-strong: #795b00;
+  --accent-warm: #cb4b16;
+  --accent-soft: rgba(181, 137, 0, 0.11);
+  --shadow: 0 24px 64px rgba(60, 50, 23, 0.18);
+  --shadow-soft: 0 10px 26px rgba(60, 50, 23, 0.11);
+}
+
+:root[data-density="compact"] {
+  --composer-gap: 12px;
+  --message-gap: 20px;
+  --topbar-height: 58px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-width: 320px;
+  background: var(--app-bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  border: 0;
+}
+
+button:not(:disabled),
+select:not(:disabled) {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button,
+input,
+textarea,
+select,
+a {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 78%, white);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 36%, transparent);
+  color: var(--text);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--text-muted) 35%, transparent);
+  background-clip: padding-box;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  min-height: 19px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-color: var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

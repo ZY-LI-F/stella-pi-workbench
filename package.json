@@ -1,0 +1,57 @@
+{
+  "name": "stella-pi-workbench",
+  "version": "0.1.0",
+  "productName": "Stella Pi Workbench",
+  "private": true,
+  "description": "A polished desktop GUI for the Pi coding agent, signed by Stella.",
+  "author": "Stella",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "postinstall": "electron-builder install-app-deps",
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "package:dir": "npm run build && electron-builder --config electron-builder.config.mjs --dir",
+    "dist": "npm run build && electron-builder --config electron-builder.config.mjs",
+    "dist:win": "npm run build && electron-builder --config electron-builder.config.mjs --win nsis --x64",
+    "dist:win:arm64": "npm run build && electron-builder --config electron-builder.config.mjs --win nsis --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --config electron-builder.config.mjs --mac dmg zip --x64",
+    "dist:mac:arm64": "npm run build && electron-builder --config electron-builder.config.mjs --mac dmg zip --arm64",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:packaged": "playwright test tests/e2e/packaged.spec.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.10",
+    "@fontsource-variable/manrope": "5.2.8",
+    "@fontsource/marck-script": "5.2.8",
+    "lucide-react": "1.24.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.1.4",
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "jsdom": "29.1.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  }
+}
