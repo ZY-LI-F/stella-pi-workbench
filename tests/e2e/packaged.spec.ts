@@ -77,9 +77,15 @@ test("packaged app boots its bundled Pi RPC runtime", async ({}, testInfo) => {
     await expect(window.getByRole("dialog", { name: "创建看板任务" })).toBeVisible();
     await window.getByRole("button", { name: "取消", exact: true }).click();
 
+    const openSidebar = window.getByRole("button", { name: "打开侧栏", exact: true });
+    if (await openSidebar.isVisible()) {
+      await openSidebar.click();
+      await expect(window.locator(".sidebar")).toHaveClass(/is-open/);
+    }
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     const settings = window.getByRole("dialog", { name: "偏好设置" });
     await expect(settings.getByText(/Pi Workbench · Pi v0\.80\.10/)).toBeVisible();
+    await expect(window.locator(".sidebar")).not.toHaveClass(/is-open/);
     expect(pageErrors).toEqual([]);
   } finally {
     await electronApp.close();

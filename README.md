@@ -186,7 +186,7 @@ Stella Pi Workbench-0.1.0-mac-arm64.dmg
 当前工作区生成的 Windows x64 安装器可用仓库根目录的 [`SHA256SUMS.txt`](SHA256SUMS.txt) 校验；v0.1.0 的 SHA-256 为：
 
 ```text
-46A6653676FE1EF9F5658A4A1BAD96B2716DB0BA4990DD5A8A78EC6791E34244
+0C52AFF44411A04FAAA65178B6775E7AAD05E761CB4B9C7967187691463C5C82
 ```
 
 macOS 签名只能在 macOS 上完成，因此不要在 Windows 上交叉生成正式 Mac 发布包。项目包含 [GitHub Actions 发布流程](.github/workflows/release.yml)，会分别在 Windows x64、macOS Apple Silicon 和 macOS Intel 主机上安装目标架构依赖并打包。

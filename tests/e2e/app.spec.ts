@@ -197,8 +197,10 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
       .toBeLessThanOrEqual(1);
     await window.getByLabel("打开侧栏").click();
     await expect(responsiveSidebar).toHaveClass(/is-open/);
-    await window.locator(".sidebar-scrim").click();
+    await responsiveSidebar.getByRole("button", { name: "偏好设置", exact: true }).click();
+    await expect(window.getByRole("dialog", { name: "偏好设置" })).toBeVisible();
     await expect(responsiveSidebar).not.toHaveClass(/is-open/);
+    await window.keyboard.press("Escape");
 
     expect(pageErrors).toEqual([]);
   } finally {

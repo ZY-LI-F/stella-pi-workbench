@@ -356,7 +356,10 @@ export function App({ api }: AppProps) {
         onOpenPalette={() => setPaletteOpen(true)}
         onOpenTerminal={() => setTerminalOpen(true)}
         onOpenInspector={() => setInspectorOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setSidebarOpen(false);
+          setSettingsOpen(true);
+        }}
       />
 
       {workspaceView === "chat" && bootstrap && piReady ? <main className="workspace">
