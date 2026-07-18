@@ -18,7 +18,7 @@ const task: KanbanTask = Object.freeze({
   projectPath: "C:/project",
   projectName: "project",
   trusted: true,
-  workflowId: "feature-delivery",
+  executionTarget: { kind: "workflow", workflowId: "feature-delivery" },
   status: "planned",
   createdAt: "2026-07-17T00:00:00.000Z",
   updatedAt: "2026-07-17T00:00:00.000Z",
@@ -51,7 +51,7 @@ describe("kanban domain", () => {
 
   it("rejects malformed persisted state instead of silently repairing it", () => {
     expect(() => parseBoardState({ version: BOARD_SCHEMA_VERSION, tasks: "bad", runs: [], activities: [] }))
-      .toThrow("缺少 tasks、runs 或 activities");
+      .toThrow("缺少 tasks 数组");
     expect(() => parseBoardState({ version: 99, tasks: [], runs: [], activities: [] }))
       .toThrow("不支持的看板版本");
     expect(() => parseBoardState({
@@ -59,6 +59,11 @@ describe("kanban domain", () => {
       tasks: [task, { ...task }],
       runs: [],
       activities: [],
+      comments: [],
+      agentTasks: [],
+      squads: [],
+      autopilots: [],
+      autopilotRuns: [],
     })).toThrow("重复任务 id");
   });
 });

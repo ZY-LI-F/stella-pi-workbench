@@ -28,6 +28,38 @@
 
 看板交互包括：创建与编辑任务、项目/流程筛选、搜索、原生拖放、分发与重新分发、实时星轨进度、Agent 与工具事件、Markdown 产物、会话文件定位、人工批准/驳回、中止流程、手动归档、删除，以及 Agent/团队/流程目录。待运行、执行中和待审核列由编排器维护；用户手动拖放只允许使用“待规划、受阻、已完成”这些不会伪造执行状态的列。
 
+## AgentTaskQueue、动态 Squad 与 Autopilot
+
+Stella 在固定看板之上增加了一层刻意保持简单的本地自动化，不引入 PostgreSQL、外部 Daemon 或第二套后端服务：
+
+- **持久 AgentTaskQueue**：任务可直接交给单个 Agent；排队、运行、会话路径、最终输出、token、费用、失败和中断都会写入 `board.json`。应用异常退出后，运行项会明确恢复为 `interrupted`，不会伪造完成。
+- **评论与 `@mention` 委派**：任务详情支持讨论。评论中的精确 `@builder` / `@BUILD` 会生成真实子 AgentTask；未知或歧义 mention 会整体拒绝，不留下半条评论或半组队列。
+- **动态 Squad**：用户可保存 Leader、可委派成员与 Leader 固定指令。Leader 先由真实 Pi 执行，再依据产物中的精确 `@mention` 创建成员任务；父项只有在全部子项成功后才完成，任一成员失败会保存原因并终止同组剩余项。
+- **Autopilot**：把“任务模板 + 当前项目 + 执行目标”固化成 Manual、Schedule 或 Webhook 规则。每次触发都会新建独立 Task 和审计记录，然后进入同一套真实分发路径，不复用旧任务状态。
+
+![Stella 自动化工作室](docs/automation-stella.png)
+
+Schedule 仅在 Stella 应用打开期间运行。`nextRunAt` 会持久化；若启动时发现停机期间已有计划到期，Stella 只写入一条 `missed` 审计并推进到第一个未来时间，不批量补跑，也不声称自己在后台在线。
+
+Webhook Server 只绑定 `127.0.0.1`，默认端口为 `43127`。创建 Webhook 规则时会生成随机 token，自动化工作室会显示监听状态并提供完整 URL 的复制按钮。本机脚本可直接发送 JSON object：
+
+```bash
+curl -X POST "http://127.0.0.1:43127/api/webhooks/<从自动化工作室复制的随机 token>" \
+  -H "Content-Type: application/json" \
+  -d '{"ref":"refs/heads/main","action":"verify"}'
+```
+
+成功响应为 HTTP `202`，包含真实 `autopilotId`、`runId` 和 `taskId`；无效 method、route、token、Content-Type、UTF-8、JSON 或超限请求会返回结构化 JSON 错误。若任务分发失败，HTTP 不会返回成功，失败原因仍会保存在对应审计中。payload 同时保存在审计上下文并附加到新任务说明。
+
+可用环境变量：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `STELLA_WEBHOOK_PORT` | `43127` | 固定监听端口，必须是 `1..65535`；冲突会在界面显示 `BIND ERROR`，不会随机换端口。 |
+| `STELLA_WEBHOOK_MAX_BYTES` | `1048576` | JSON 请求体上限（bytes）；设为 `0` 可显式取消大小限制。 |
+
+Webhook 与 Schedule 都随桌面应用启动和关闭；它们不是公网服务，也不会在 Stella 退出后继续运行。
+
 ## 三套完整皮肤
 
 皮肤切换不只是换主色：每套视觉都会同步改变背景主视觉、色彩令牌、面板材质、边框与圆角、品牌符号、空状态图形、建议卡片和输入器；明色、暗色与系统模式仍可独立组合。
@@ -48,11 +80,20 @@
 
 ![定阳任务看板](docs/kanban-dingyang.png)
 
+自动化工作室同样完整适配三套视觉，而不是独立的管理后台：
+
+![晨曦自动化工作室](docs/automation-chenxi.png)
+
+![定阳自动化工作室](docs/automation-dingyang.png)
+
 晨曦与定阳的背景图为本项目生成的原创视觉资源，并分别带有“晨曦”“定阳”专属中文题字；开源项目只用于设计研究，没有复制其图片资产或打包其运行代码。
 
 ## 已覆盖的交互
 
 - 任务看板：六阶段任务星图、跨项目筛选、搜索、流程过滤、拖放、详情、编辑、删除和状态归档。
+- 本地任务队列：直接 Agent 分发、任务评论、精确 `@mention`、串行持久队列、真实产物与运行统计。
+- 动态 Squad：Leader 提示词、成员目录、产物驱动的成员委派、父子执行轨迹与整组失败传播。
+- Autopilot：Manual、应用打开期间的 Schedule、loopback Webhook、启停、绑定项目、fresh Task 和触发审计。
 - 固定编排：五个 Agent、三个团队、三条流程、版本快照、隔离 Pi 会话、项目写入互斥与真实运行事件。
 - 人工关卡：方案批准/驳回、最终验收、决定说明、流程中止、失败原因与可重新分发的历史实例。
 - 流程产物：保留每个 Agent 的最终 Markdown、Pi 会话路径、输入/输出 token 与费用统计。
@@ -160,17 +201,17 @@ npm run build
 npm run test:e2e
 ```
 
-单元测试覆盖看板持久化与严格校验、重启中断恢复、任务状态约束、流程进度、隔离 Agent 顺序、人工关卡、用户中止，以及原有的运行态归并、流式消息、工具调用、消息队列、扩展 UI、皮肤偏好和输入器行为。Electron 端到端测试使用真实 Pi RPC 冷启动，并检查任务创建、流程选择、跨列拖放、编排目录、三套看板皮肤、聊天切换、命令面板、设置、检查器、终端、图片附件和响应式侧栏。`test:packaged` 会清空可执行文件搜索路径后直接启动 `release/` 中的打包应用，只有安装包内置 Pi RPC 成功返回状态后才通过。
+单元测试覆盖看板持久化与严格校验、重启中断恢复、任务状态约束、流程进度、隔离 Agent 顺序、人工关卡、用户中止、AgentTaskQueue、评论 mention 原子性、Squad 父子收敛、Manual 重复触发、Schedule 精确时钟与 missed 恢复、Webhook 身份与 HTTP 边界，以及原有的运行态归并、流式消息、工具调用、消息队列、扩展 UI、皮肤偏好和输入器行为。Electron 端到端测试使用真实 Pi RPC 冷启动，并检查任务创建、流程选择、跨列拖放、编排目录、自动化工作室、三套看板/自动化皮肤、聊天切换、命令面板、设置、检查器、终端、图片附件和响应式侧栏。`test:packaged` 会清空可执行文件搜索路径后直接启动 `release/` 中的打包应用，只有安装包内置 Pi RPC 成功返回状态后才通过。
 
 ## 结构
 
 ```text
 src/
-├─ main/                 Electron 主进程、看板存储、工作流编排、Pi RPC 生命周期
+├─ main/                 Electron 主进程、看板存储、AgentTask/Schedule/Webhook Runner、Pi RPC 生命周期
 ├─ preload/              contextBridge 白名单 API
 ├─ renderer/src/
 │  ├─ components/        会话、输入器、检查器、终端、弹窗和导航
-│  ├─ features/kanban/   看板、任务详情、编排目录与任务编辑器
+│  ├─ features/kanban/   看板、任务详情、编排目录、Squad 与 Autopilot 工作室
 │  ├─ hooks/             Pi/看板状态同步与本地偏好
 │  ├─ assets/skins/      晨曦与定阳的原创皮肤主视觉
 │  ├─ lib/               不可变运行态 reducer 与皮肤定义

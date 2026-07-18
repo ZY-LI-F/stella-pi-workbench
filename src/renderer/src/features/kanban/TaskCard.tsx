@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, Bot, Clock3, Play, ShieldAlert } from "lucide-
 import {
   activeStep,
   workflowProgress,
+  type AgentTask,
   type BoardBridgeEvent,
   type KanbanTask,
   type TaskActivity,
@@ -14,9 +15,12 @@ import { PRIORITY_LABEL, STATUS_LABEL, formatRelativeTime } from "./kanban-forma
 interface TaskCardProps {
   readonly task: KanbanTask;
   readonly workflow?: WorkflowDefinition;
+  readonly executionLabel: string;
   readonly run?: WorkflowRun;
+  readonly agentTask?: AgentTask;
   readonly activities: readonly TaskActivity[];
   readonly liveEvent?: Extract<BoardBridgeEvent, { type: "agent-event" }>;
+  readonly liveAgentTaskEvent?: Extract<BoardBridgeEvent, { type: "agent-task-event" }>;
   readonly busy: boolean;
   readonly onOpen: () => void;
   readonly onDispatch: () => void;
@@ -31,14 +35,14 @@ function trailClass(status: WorkflowRun["steps"][number]["status"]): string {
   return "";
 }
 
-export function TaskCard({ task, workflow, run, activities, liveEvent, busy, onOpen, onDispatch, onDragStart }: TaskCardProps) {
+export function TaskCard({ task, workflow, executionLabel, run, agentTask, activities, liveEvent, liveAgentTaskEvent, busy, onOpen, onDispatch, onDragStart }: TaskCardProps) {
   const step = activeStep(run);
   const latestActivity = activities.at(-1);
-  const canDispatch = !task.activeRunId && task.status !== "completed";
+  const canDispatch = !task.activeRunId && !task.activeAgentTaskId && task.status !== "completed";
   return (
     <article
       className={`kanban-card priority-${task.priority} status-${task.status}`}
-      draggable={!task.activeRunId}
+      draggable={!task.activeRunId && !task.activeAgentTaskId}
       onDragStart={onDragStart}
       data-task-id={task.id}
     >
@@ -52,7 +56,7 @@ export function TaskCard({ task, workflow, run, activities, liveEvent, busy, onO
       {task.description && <p className="kanban-card__description">{task.description}</p>}
 
       <div className="kanban-card__workflow">
-        <span>{workflow?.shortName ?? task.workflowId}</span>
+        <span>{executionLabel}</span>
         {run && <strong>{workflowProgress(run)}%</strong>}
       </div>
 
@@ -69,12 +73,27 @@ export function TaskCard({ task, workflow, run, activities, liveEvent, busy, onO
         {liveEvent && <span className="star-trail__signal" title={liveEvent.eventType}><Activity size={10} /></span>}
       </div>
 
+      {agentTask && (
+        <div className={`agent-task-rail agent-task-rail--${agentTask.status}`}>
+          <span><i /><b /></span>
+          <div><small>{agentTask.kind === "direct" ? "DIRECT AGENT" : agentTask.kind === "mention-root" ? "MENTION GROUP" : agentTask.kind === "squad-leader" ? "SQUAD LEADER" : "DELEGATED"}</small><strong>{agentTask.agentSnapshot.name}</strong></div>
+          <em>{liveAgentTaskEvent?.eventType ?? agentTask.status}</em>
+        </div>
+      )}
+
       {task.blockedReason && <div className="kanban-card__alert"><AlertTriangle size={13} /><span>{task.blockedReason}</span></div>}
       {step && (
         <div className="kanban-card__agent">
           {step.stepKind === "human-gate" ? <ShieldAlert size={14} /> : <Bot size={14} />}
           <span><small>{step.stepKind === "human-gate" ? "人工关卡" : "当前 Agent"}</small><strong>{step.name}</strong></span>
           {step.status === "running" && <i className="agent-pulse" />}
+        </div>
+      )}
+      {!step && agentTask && !["succeeded", "failed", "interrupted", "cancelled"].includes(agentTask.status) && (
+        <div className="kanban-card__agent">
+          <Bot size={14} />
+          <span><small>当前 Agent</small><strong>{agentTask.agentSnapshot.name}</strong></span>
+          {agentTask.status === "running" && <i className="agent-pulse" />}
         </div>
       )}
 

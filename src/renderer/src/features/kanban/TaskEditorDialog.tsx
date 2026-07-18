@@ -1,6 +1,15 @@
 import { useState, type FormEvent } from "react";
-import { Check, Folder, GitBranch, Sparkles } from "lucide-react";
-import type { CreateTaskInput, KanbanTask, TaskPriority, UpdateTaskInput, WorkflowDefinition } from "@shared/kanban";
+import { Bot, Check, Folder, GitBranch, Sparkles, Users } from "lucide-react";
+import type {
+  AgentDefinition,
+  CreateTaskInput,
+  ExecutionTarget,
+  KanbanTask,
+  Squad,
+  TaskPriority,
+  UpdateTaskInput,
+  WorkflowDefinition,
+} from "@shared/kanban";
 import type { ProjectMeta } from "@shared/contracts";
 import { Modal } from "../../components/Modal";
 
@@ -8,6 +17,8 @@ interface TaskEditorDialogProps {
   readonly task?: KanbanTask;
   readonly project: ProjectMeta;
   readonly workflows: readonly WorkflowDefinition[];
+  readonly agents: readonly AgentDefinition[];
+  readonly squads: readonly Squad[];
   readonly busy: boolean;
   readonly onClose: () => void;
   readonly onCreate: (input: CreateTaskInput) => Promise<void>;
@@ -21,12 +32,20 @@ const PRIORITIES: readonly { readonly value: TaskPriority; readonly label: strin
   { value: "urgent", label: "紧急" },
 ]);
 
-export function TaskEditorDialog({ task, project, workflows, busy, onClose, onCreate, onUpdate }: TaskEditorDialogProps) {
+function targetId(target: ExecutionTarget | undefined, workflows: readonly WorkflowDefinition[]): string {
+  if (!target) return workflows[0]?.id ?? "";
+  if (target.kind === "workflow") return target.workflowId;
+  if (target.kind === "agent") return target.agentId;
+  return target.squadId;
+}
+
+export function TaskEditorDialog({ task, project, workflows, agents, squads, busy, onClose, onCreate, onUpdate }: TaskEditorDialogProps) {
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
   const [acceptanceCriteria, setAcceptanceCriteria] = useState(task?.acceptanceCriteria ?? "");
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "medium");
-  const [workflowId, setWorkflowId] = useState(task?.workflowId ?? workflows[0]?.id ?? "");
+  const [executionKind, setExecutionKind] = useState<ExecutionTarget["kind"]>(task?.executionTarget.kind ?? "workflow");
+  const [executionId, setExecutionId] = useState(targetId(task?.executionTarget, workflows));
   const [error, setError] = useState("");
 
   const submit = async (event: FormEvent) => {
@@ -35,21 +54,26 @@ export function TaskEditorDialog({ task, project, workflows, busy, onClose, onCr
       setError("请填写任务标题");
       return;
     }
-    if (!workflowId) {
-      setError("请选择流程模板");
+    if (!executionId) {
+      setError("请选择执行目标");
       return;
     }
+    const executionTarget: ExecutionTarget = executionKind === "workflow"
+      ? { kind: "workflow", workflowId: executionId }
+      : executionKind === "agent"
+        ? { kind: "agent", agentId: executionId }
+        : { kind: "squad", squadId: executionId };
     setError("");
     try {
       if (task) {
-        await onUpdate({ taskId: task.id, title, description, acceptanceCriteria, priority, workflowId });
+        await onUpdate({ taskId: task.id, title, description, acceptanceCriteria, priority, executionTarget });
       } else {
         await onCreate({
           title,
           description,
           acceptanceCriteria,
           priority,
-          workflowId,
+          executionTarget,
           projectPath: project.cwd,
           projectName: project.name,
           trusted: project.trusted,
@@ -98,20 +122,45 @@ export function TaskEditorDialog({ task, project, workflows, busy, onClose, onCr
             </select>
           </label>
           <div className="kanban-field">
-            <span>固定流程</span>
+            <span>执行目标</span>
+            <div className="execution-kind-picker" role="tablist" aria-label="执行目标类型">
+              {([
+                ["workflow", "固定流程", Sparkles],
+                ["agent", "单 Agent", Bot],
+                ["squad", "动态 Squad", Users],
+              ] as const).map(([kind, label, Icon]) => (
+                <button type="button" role="tab" aria-selected={executionKind === kind} className={executionKind === kind ? "is-selected" : ""} key={kind} onClick={() => {
+                  setExecutionKind(kind);
+                  setExecutionId(kind === "workflow" ? workflows[0]?.id ?? "" : kind === "agent" ? agents[0]?.id ?? "" : squads[0]?.id ?? "");
+                }}><Icon size={12} />{label}</button>
+              ))}
+            </div>
             <div className="workflow-picker">
-              {workflows.map((workflow) => (
+              {executionKind === "workflow" && workflows.map((workflow) => (
                 <button
                   type="button"
-                  className={workflow.id === workflowId ? "is-selected" : ""}
+                  className={workflow.id === executionId ? "is-selected" : ""}
                   key={workflow.id}
-                  onClick={() => setWorkflowId(workflow.id)}
+                  onClick={() => setExecutionId(workflow.id)}
                 >
                   <span><Sparkles size={13} />{workflow.shortName}</span>
                   <small>{workflow.steps.length} 个步骤</small>
-                  {workflow.id === workflowId && <Check size={14} />}
+                  {workflow.id === executionId && <Check size={14} />}
                 </button>
               ))}
+              {executionKind === "agent" && agents.map((agent) => (
+                <button type="button" className={agent.id === executionId ? "is-selected" : ""} key={agent.id} onClick={() => setExecutionId(agent.id)}>
+                  <span><Bot size={13} />{agent.name}</span><small>@{agent.id} · {agent.workspaceAccess === "write" ? "可写" : "只读"}</small>
+                  {agent.id === executionId && <Check size={14} />}
+                </button>
+              ))}
+              {executionKind === "squad" && squads.map((squad) => (
+                <button type="button" className={squad.id === executionId ? "is-selected" : ""} key={squad.id} onClick={() => setExecutionId(squad.id)}>
+                  <span><Users size={13} />{squad.name}</span><small>Leader + {squad.memberAgentIds.length} 位成员</small>
+                  {squad.id === executionId && <Check size={14} />}
+                </button>
+              ))}
+              {executionKind === "squad" && squads.length === 0 && <p className="workflow-picker__empty">请先在自动化工作室创建 Squad。</p>}
             </div>
           </div>
         </div>

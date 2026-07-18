@@ -9,10 +9,15 @@ import type {
 } from "../shared/contracts";
 import type {
   BoardBootstrap,
+  CreateAutopilotInput,
+  CreateTaskCommentInput,
+  CreateSquadInput,
   CreateTaskInput,
   ManualTaskStatus,
   ResolveGateInput,
   UpdateTaskInput,
+  UpdateAutopilotInput,
+  UpdateSquadInput,
 } from "../shared/kanban";
 
 const api: StellaDesktopApi = Object.freeze({
@@ -26,6 +31,7 @@ const api: StellaDesktopApi = Object.freeze({
     ipcRenderer.invoke("stella:open-project", path, trusted) as Promise<RuntimeBootstrap>,
   revealPath: (path: string) => ipcRenderer.invoke("stella:reveal-path", path) as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("stella:open-external", url) as Promise<void>,
+  copyText: (value: string) => ipcRenderer.invoke("stella:copy-text", value) as Promise<void>,
   boardInitialize: () => ipcRenderer.invoke("stella:board:initialize") as Promise<BoardBootstrap>,
   boardCreateTask: (input: CreateTaskInput) =>
     ipcRenderer.invoke("stella:board:create-task", input) as Promise<BoardBootstrap>,
@@ -35,6 +41,22 @@ const api: StellaDesktopApi = Object.freeze({
     ipcRenderer.invoke("stella:board:move-task", taskId, status) as Promise<BoardBootstrap>,
   boardDeleteTask: (taskId: string) =>
     ipcRenderer.invoke("stella:board:delete-task", taskId) as Promise<BoardBootstrap>,
+  boardAddComment: (input: CreateTaskCommentInput) =>
+    ipcRenderer.invoke("stella:board:add-comment", input) as Promise<BoardBootstrap>,
+  boardCreateSquad: (input: CreateSquadInput) =>
+    ipcRenderer.invoke("stella:board:create-squad", input) as Promise<BoardBootstrap>,
+  boardUpdateSquad: (input: UpdateSquadInput) =>
+    ipcRenderer.invoke("stella:board:update-squad", input) as Promise<BoardBootstrap>,
+  boardDeleteSquad: (squadId: string) =>
+    ipcRenderer.invoke("stella:board:delete-squad", squadId) as Promise<BoardBootstrap>,
+  boardCreateAutopilot: (input: CreateAutopilotInput) =>
+    ipcRenderer.invoke("stella:board:create-autopilot", input) as Promise<BoardBootstrap>,
+  boardUpdateAutopilot: (input: UpdateAutopilotInput) =>
+    ipcRenderer.invoke("stella:board:update-autopilot", input) as Promise<BoardBootstrap>,
+  boardDeleteAutopilot: (autopilotId: string) =>
+    ipcRenderer.invoke("stella:board:delete-autopilot", autopilotId) as Promise<BoardBootstrap>,
+  boardTriggerAutopilot: (autopilotId: string) =>
+    ipcRenderer.invoke("stella:board:trigger-autopilot", autopilotId) as Promise<BoardBootstrap>,
   boardDispatchTask: (taskId: string) =>
     ipcRenderer.invoke("stella:board:dispatch-task", taskId) as Promise<BoardBootstrap>,
   boardResolveGate: (input: ResolveGateInput) =>

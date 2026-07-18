@@ -9,6 +9,7 @@ import {
   TerminalSquare,
   Users,
   Workflow,
+  Zap,
 } from "lucide-react";
 import type { ProjectMeta, StellaDesktopApi } from "@shared/contracts";
 import {
@@ -16,9 +17,13 @@ import {
   type BoardLane,
   type KanbanTask,
   type ManualTaskStatus,
+  type OrchestrationCatalog,
+  type Squad,
+  type WorkflowDefinition,
 } from "@shared/kanban";
 import type { KanbanController } from "../../hooks/use-kanban";
 import { CatalogDialog } from "./CatalogDialog";
+import { AutomationStudioDialog } from "./AutomationStudioDialog";
 import { LANE_CONFIG } from "./kanban-format";
 import { TaskCard } from "./TaskCard";
 import { TaskDetailPanel } from "./TaskDetailPanel";
@@ -42,6 +47,18 @@ const PRIORITY_ORDER: Readonly<Record<KanbanTask["priority"], number>> = Object.
   low: 3,
 });
 
+function workflowForTask(task: KanbanTask, catalog: OrchestrationCatalog): WorkflowDefinition | undefined {
+  const target = task.executionTarget;
+  return target.kind === "workflow" ? catalog.workflows.find((workflow) => workflow.id === target.workflowId) : undefined;
+}
+
+function executionLabelForTask(task: KanbanTask, catalog: OrchestrationCatalog, squads: readonly Squad[]): string {
+  const target = task.executionTarget;
+  if (target.kind === "workflow") return catalog.workflows.find((workflow) => workflow.id === target.workflowId)?.shortName ?? target.workflowId;
+  if (target.kind === "agent") return catalog.agents.find((agent) => agent.id === target.agentId)?.name ?? target.agentId;
+  return squads.find((squad) => squad.id === target.squadId)?.name ?? target.squadId;
+}
+
 export function KanbanWorkspace({
   api,
   controller,
@@ -58,6 +75,7 @@ export function KanbanWorkspace({
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const [editorTaskId, setEditorTaskId] = useState<string | "new">();
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [automationOpen, setAutomationOpen] = useState(false);
 
   useEffect(() => {
     if (createRequest > 0) setEditorTaskId("new");
@@ -80,7 +98,7 @@ export function KanbanWorkspace({
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return board.tasks
       .filter((task) => projectScope === "all" || task.projectPath === project.cwd)
-      .filter((task) => workflowFilter === "all" || task.workflowId === workflowFilter)
+      .filter((task) => workflowFilter === "all" || (task.executionTarget.kind === "workflow" && task.executionTarget.workflowId === workflowFilter))
       .filter((task) => !normalizedQuery || `${task.title} ${task.description} ${task.acceptanceCriteria} ${task.projectName}`.toLocaleLowerCase().includes(normalizedQuery))
       .sort((left, right) => PRIORITY_ORDER[left.priority] - PRIORITY_ORDER[right.priority] || Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
   }, [board, project.cwd, projectScope, query, workflowFilter]);
@@ -138,6 +156,8 @@ export function KanbanWorkspace({
 
   const taskRuns = (taskId: string) => board.runs.filter((run) => run.taskId === taskId);
   const taskActivities = (taskId: string) => board.activities.filter((activity) => activity.taskId === taskId);
+  const taskAgentTasks = (taskId: string) => board.agentTasks.filter((agentTask) => agentTask.taskId === taskId);
+  const taskComments = (taskId: string) => board.comments.filter((comment) => comment.taskId === taskId);
 
   return (
     <main className={`kanban-workspace ${selectedTask ? "has-detail" : ""}`}>
@@ -150,6 +170,7 @@ export function KanbanWorkspace({
         </div>
         <div className="kanban-header__actions">
           <button type="button" className="button-secondary" onClick={() => setCatalogOpen(true)}><Users size={15} />编排目录</button>
+          <button type="button" className="button-secondary" onClick={() => setAutomationOpen(true)}><Zap size={15} />自动化</button>
           <button type="button" className="icon-button" aria-label="打开命令终端" onClick={onOpenTerminal}><TerminalSquare size={16} /></button>
           <button type="button" className="button-primary" onClick={() => setEditorTaskId("new")}><Plus size={15} />新建任务</button>
         </div>
@@ -183,14 +204,20 @@ export function KanbanWorkspace({
                   {tasks.map((task) => {
                     const runs = taskRuns(task.id);
                     const run = runs.find((candidate) => candidate.id === task.activeRunId) ?? runs[0];
+                    const agentTasks = taskAgentTasks(task.id);
+                    const agentTask = agentTasks.find((candidate) => candidate.id === task.activeAgentTaskId) ?? agentTasks.at(-1);
+                    const workflow = workflowForTask(task, catalog);
                     return (
                       <TaskCard
                         key={task.id}
                         task={task}
-                        workflow={catalog.workflows.find((workflow) => workflow.id === task.workflowId)}
+                        workflow={workflow}
+                        executionLabel={executionLabelForTask(task, catalog, board.squads)}
                         run={run}
+                        agentTask={agentTask}
                         activities={taskActivities(task.id)}
                         liveEvent={task.activeRunId && run ? state.liveEvents[run.id] : undefined}
+                        liveAgentTaskEvent={agentTask ? state.liveAgentTaskEvents[agentTask.id] : undefined}
                         busy={state.pending.includes(task.id)}
                         onOpen={() => setSelectedTaskId(task.id)}
                         onDispatch={() => void dispatch(task.id).catch(() => undefined)}
@@ -212,7 +239,10 @@ export function KanbanWorkspace({
           <TaskDetailPanel
             task={selectedTask}
             catalog={catalog}
+            squads={board.squads}
             runs={taskRuns(selectedTask.id)}
+            agentTasks={taskAgentTasks(selectedTask.id)}
+            comments={taskComments(selectedTask.id)}
             activities={taskActivities(selectedTask.id)}
             busy={state.pending.includes(selectedTask.id)}
             onClose={() => setSelectedTaskId(undefined)}
@@ -224,6 +254,10 @@ export function KanbanWorkspace({
             }}
             onDelete={async () => {
               try { await controller.deleteTask(selectedTask.id); setSelectedTaskId(undefined); }
+              catch (cause) { report(cause); throw cause; }
+            }}
+            onAddComment={async (body) => {
+              try { await controller.addComment({ taskId: selectedTask.id, body }); }
               catch (cause) { report(cause); throw cause; }
             }}
             onMove={(status) => move(selectedTask.id, status)}
@@ -246,6 +280,8 @@ export function KanbanWorkspace({
             trusted: editorTask.trusted,
           } : project}
           workflows={catalog.workflows}
+          agents={catalog.agents}
+          squads={board.squads}
           busy={state.pending.includes(editorTaskId === "new" ? "create" : editorTaskId)}
           onClose={() => setEditorTaskId(undefined)}
           onCreate={async (input) => { await controller.createTask(input); }}
@@ -253,6 +289,26 @@ export function KanbanWorkspace({
         />
       )}
       {catalogOpen && <CatalogDialog catalog={catalog} onClose={() => setCatalogOpen(false)} />}
+      {automationOpen && (
+        <AutomationStudioDialog
+          catalog={catalog}
+          project={project}
+          squads={board.squads}
+          autopilots={board.autopilots}
+          autopilotRuns={board.autopilotRuns}
+          webhookStatus={state.automationRuntime?.webhook}
+          busy={state.pending.some((key) => key.startsWith("squad:") || key.startsWith("autopilot:"))}
+          onClose={() => setAutomationOpen(false)}
+          onCreateSquad={async (input) => { await controller.createSquad(input); }}
+          onUpdateSquad={async (input) => { await controller.updateSquad(input); }}
+          onDeleteSquad={async (squadId) => { await controller.deleteSquad(squadId); }}
+          onCreateAutopilot={async (input) => { await controller.createAutopilot(input); }}
+          onUpdateAutopilot={async (input) => { await controller.updateAutopilot(input); }}
+          onDeleteAutopilot={async (autopilotId) => { await controller.deleteAutopilot(autopilotId); }}
+          onTriggerAutopilot={async (autopilotId) => { await controller.triggerAutopilot(autopilotId); }}
+          onCopy={async (value) => { await api.copyText(value); }}
+        />
+      )}
     </main>
   );
 }

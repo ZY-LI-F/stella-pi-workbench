@@ -63,6 +63,23 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await expect(window.locator("html")).toHaveAttribute("data-skin", "stella");
     await window.screenshot({ path: "docs/kanban-stella.png", fullPage: true, animations: "disabled" });
 
+    await window.getByRole("button", { name: "自动化", exact: true }).click();
+    let automationStudio = window.getByRole("dialog", { name: "自动化工作室" });
+    await automationStudio.getByRole("tab", { name: "Autopilot" }).click();
+    await automationStudio.getByRole("tab", { name: "Webhook" }).click();
+    await automationStudio.getByLabel("规则名称").fill("本机构建回调");
+    await automationStudio.getByLabel("任务标题").fill("处理本机构建回调");
+    await automationStudio.getByLabel("任务说明").fill("读取本机脚本传入的 JSON 上下文并执行固定检查。" );
+    await automationStudio.getByLabel("验收标准").fill("真实任务已创建并留下可检查产物。" );
+    await automationStudio.getByRole("button", { name: "创建规则" }).click();
+    await automationStudio.getByRole("button", { name: /本机构建回调/ }).click();
+    await expect(automationStudio.getByText("LISTENING")).toBeVisible();
+    await expect(automationStudio.getByText(/127\.0\.0\.1:43127\/api\/webhooks\//)).toBeVisible();
+    await automationStudio.locator(".autopilot-editor__scroll").evaluate((element) => { element.scrollTop = 0; });
+    await window.screenshot({ path: "docs/automation-stella.png", fullPage: true, animations: "disabled" });
+    await window.keyboard.press("Escape");
+    await expect(automationStudio).toBeHidden();
+
     await window.keyboard.press("Control+K");
     const palette = window.getByRole("dialog", { name: "搜索与命令" });
     await expect(palette).toBeVisible();
@@ -89,6 +106,11 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await window.keyboard.press("Escape");
     await expect(settings).toBeHidden();
     await window.screenshot({ path: "docs/kanban-chenxi.png", fullPage: true, animations: "disabled" });
+    await window.getByRole("button", { name: "自动化", exact: true }).click();
+    automationStudio = window.getByRole("dialog", { name: "自动化工作室" });
+    await automationStudio.getByRole("tab", { name: "Autopilot" }).click();
+    await window.screenshot({ path: "docs/automation-chenxi.png", fullPage: true, animations: "disabled" });
+    await window.keyboard.press("Escape");
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     settings = window.getByRole("dialog", { name: "偏好设置" });
@@ -97,6 +119,11 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await window.keyboard.press("Escape");
     await expect(settings).toBeHidden();
     await window.screenshot({ path: "docs/kanban-dingyang.png", fullPage: true, animations: "disabled" });
+    await window.getByRole("button", { name: "自动化", exact: true }).click();
+    automationStudio = window.getByRole("dialog", { name: "自动化工作室" });
+    await automationStudio.getByRole("tab", { name: "Autopilot" }).click();
+    await window.screenshot({ path: "docs/automation-dingyang.png", fullPage: true, animations: "disabled" });
+    await window.keyboard.press("Escape");
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     settings = window.getByRole("dialog", { name: "偏好设置" });

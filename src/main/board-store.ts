@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
-  BOARD_SCHEMA_VERSION,
   EMPTY_BOARD_STATE,
+  LEGACY_BOARD_SCHEMA_VERSION,
+  parseBoardFile,
   parseBoardState,
   type BoardState,
   type TaskActivity,
@@ -35,12 +36,14 @@ export class BoardStore implements BoardRepository {
     const loaded = await this.#load();
     this.#state = loaded;
     const interruptedRuns = loaded.runs.filter((run) => run.status === "queued" || run.status === "running");
-    if (interruptedRuns.length === 0) return loaded;
+    const interruptedAgentTasks = loaded.agentTasks.filter((agentTask) => agentTask.status === "running");
+    if (interruptedRuns.length === 0 && interruptedAgentTasks.length === 0) return loaded;
 
     const interruptedIds = new Set(interruptedRuns.map((run) => run.id));
+    const interruptedAgentTaskIds = new Set(interruptedAgentTasks.map((agentTask) => agentTask.id));
     const now = this.#dependencies.now();
     return this.update((current) => {
-      const activities: TaskActivity[] = interruptedRuns.map((run) => Object.freeze({
+      const workflowActivities: TaskActivity[] = interruptedRuns.map((run) => Object.freeze({
         id: this.#dependencies.id(),
         taskId: run.taskId,
         runId: run.id,
@@ -50,17 +53,38 @@ export class BoardStore implements BoardRepository {
         detail: "Stella 不会把未完成的进程标记为成功；可从任务详情重新分发。",
         createdAt: now,
       }));
+      const agentTaskActivities: TaskActivity[] = interruptedAgentTasks.map((agentTask) => Object.freeze({
+        id: this.#dependencies.id(),
+        taskId: agentTask.taskId,
+        agentTaskId: agentTask.id,
+        kind: "error",
+        summary: "应用重启，Agent 执行已中断",
+        detail: `${agentTask.agentSnapshot.name} 的进程已不存在；已排队工作仍会继续执行。`,
+        createdAt: now,
+      }));
       return {
-        version: BOARD_SCHEMA_VERSION,
-        tasks: current.tasks.map((task) => interruptedIds.has(task.activeRunId ?? "")
-          ? Object.freeze({
+        ...current,
+        tasks: current.tasks.map((task) => {
+          if (interruptedIds.has(task.activeRunId ?? "")) {
+            return Object.freeze({
               ...task,
               status: "interrupted" as const,
               activeRunId: undefined,
               blockedReason: "Stella 在流程运行期间退出。",
               updatedAt: now,
-            })
-          : task),
+            });
+          }
+          if (interruptedAgentTaskIds.has(task.activeAgentTaskId ?? "")) {
+            return Object.freeze({
+              ...task,
+              status: "interrupted" as const,
+              activeAgentTaskId: undefined,
+              blockedReason: "Stella 在 Agent 执行期间退出。",
+              updatedAt: now,
+            });
+          }
+          return task;
+        }),
         runs: current.runs.map((run) => interruptedIds.has(run.id)
           ? Object.freeze({
               ...run,
@@ -73,7 +97,17 @@ export class BoardStore implements BoardRepository {
               completedAt: now,
             })
           : run),
-        activities: [...current.activities, ...activities],
+        agentTasks: current.agentTasks.map((agentTask) => interruptedAgentTaskIds.has(agentTask.id)
+          ? Object.freeze({
+              ...agentTask,
+              status: "interrupted" as const,
+              runtimeToken: undefined,
+              error: "Stella 在 Agent 执行期间退出。",
+              updatedAt: now,
+              completedAt: now,
+            })
+          : agentTask),
+        activities: [...current.activities, ...workflowActivities, ...agentTaskActivities],
       };
     });
   }
@@ -106,7 +140,25 @@ export class BoardStore implements BoardRepository {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`无法解析看板文件 ${this.#path}: ${message}`);
       }
-      return parseBoardState(parsed);
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        !Array.isArray(parsed) &&
+        (parsed as Record<string, unknown>).version === LEGACY_BOARD_SCHEMA_VERSION
+      ) {
+        const timestamp = this.#dependencies.now().replaceAll(":", "-");
+        const backupPath = `${this.#path}.v1.${timestamp}.${this.#dependencies.id()}.bak`;
+        await copyFile(this.#path, backupPath);
+        try {
+          const migrated = parseBoardFile(parsed).state;
+          await this.#write(migrated);
+          return migrated;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`迁移 schema v1 看板失败；原文件未修改，备份位于 ${backupPath}: ${message}`);
+        }
+      }
+      return parseBoardFile(parsed).state;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return EMPTY_BOARD_STATE;
       throw error;

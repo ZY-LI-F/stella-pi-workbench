@@ -9,6 +9,7 @@ import {
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   shell,
@@ -29,17 +30,29 @@ import type {
 import {
   TASK_PRIORITIES,
   type BoardBootstrap,
+  type CreateAutopilotInput,
+  type CreateTaskCommentInput,
   type CreateTaskInput,
+  type ExecutionTarget,
+  type CreateSquadInput,
   type ManualTaskStatus,
   type ResolveGateInput,
   type UpdateTaskInput,
+  type UpdateAutopilotInput,
+  type UpdateSquadInput,
 } from "../shared/kanban";
 import { BUILTIN_ORCHESTRATION_CATALOG } from "../shared/orchestration-catalog";
+import { AgentTaskRunner, type AgentTaskRuntimeFactory } from "./agent-task-runner";
+import { AgentTaskService } from "./agent-task-service";
+import { AutopilotService } from "./autopilot-service";
 import { BoardService } from "./board-service";
 import { BoardStore } from "./board-store";
 import { PiRpcRuntime } from "./pi-rpc-runtime";
+import { ScheduleRunner } from "./schedule-runner";
 import { StateStore } from "./state-store";
+import { SquadService } from "./squad-service";
 import { WorkflowOrchestrator, type WorkflowRuntimeFactory } from "./workflow-orchestrator";
+import { WebhookServer, webhookMaxBytesFromEnvironment, webhookPortFromEnvironment } from "./webhook-server";
 
 const rpcEntryPath = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
 const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
@@ -117,6 +130,13 @@ let stateStore: StateStore;
 let boardStore: BoardStore;
 let boardService: BoardService;
 let workflowOrchestrator: WorkflowOrchestrator;
+let agentTaskService: AgentTaskService;
+let agentTaskRunner: AgentTaskRunner;
+let squadService: SquadService;
+let autopilotService: AutopilotService;
+let scheduleRunner: ScheduleRunner;
+let webhookServer: WebhookServer;
+const singleInstanceLock = app.requestSingleInstanceLock();
 
 function broadcast(source: "pi" | "runtime" | "board", payload: unknown): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -141,6 +161,16 @@ const workflowRuntimeFactory: WorkflowRuntimeFactory = Object.freeze({
   }),
 });
 
+const agentTaskRuntimeFactory: AgentTaskRuntimeFactory = Object.freeze({
+  create: (callbacks: Parameters<AgentTaskRuntimeFactory["create"]>[0]) => new PiRpcRuntime({
+    executablePath: process.execPath,
+    rpcEntryPath,
+    spawnProcess: (command, args, options) => spawn(command, [...args], options),
+    emitPiEvent: callbacks.emitPiEvent,
+    emitRuntimeSignal: callbacks.emitRuntimeSignal,
+  }),
+});
+
 function objectValue(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${label} 必须是对象`);
   return value as Record<string, unknown>;
@@ -156,6 +186,25 @@ function textValue(value: unknown, label: string): string {
   return value;
 }
 
+function stringArrayValue(value: unknown, label: string): readonly string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) throw new Error(`${label} 必须是字符串数组`);
+  return Object.freeze([...value]);
+}
+
+function validatedExecutionTarget(value: unknown): ExecutionTarget {
+  const target = objectValue(value, "executionTarget");
+  if (target.kind === "workflow") {
+    return Object.freeze({ kind: "workflow", workflowId: requiredString(target.workflowId, "workflowId") });
+  }
+  if (target.kind === "agent") {
+    return Object.freeze({ kind: "agent", agentId: requiredString(target.agentId, "agentId") });
+  }
+  if (target.kind === "squad") {
+    return Object.freeze({ kind: "squad", squadId: requiredString(target.squadId, "squadId") });
+  }
+  throw new Error(`不支持的执行目标: ${String(target.kind)}`);
+}
+
 function validatedCreateTask(value: unknown): CreateTaskInput {
   const input = objectValue(value, "创建任务参数");
   const priority = textValue(input.priority, "priority");
@@ -168,7 +217,7 @@ function validatedCreateTask(value: unknown): CreateTaskInput {
     projectPath: textValue(input.projectPath, "projectPath"),
     projectName: textValue(input.projectName, "projectName"),
     trusted: booleanValue(input.trusted, "trusted"),
-    workflowId: textValue(input.workflowId, "workflowId"),
+    executionTarget: validatedExecutionTarget(input.executionTarget),
   });
 }
 
@@ -182,7 +231,7 @@ function validatedUpdateTask(value: unknown): UpdateTaskInput {
     description: textValue(input.description, "description"),
     acceptanceCriteria: textValue(input.acceptanceCriteria, "acceptanceCriteria"),
     priority: priority as UpdateTaskInput["priority"],
-    workflowId: textValue(input.workflowId, "workflowId"),
+    executionTarget: validatedExecutionTarget(input.executionTarget),
   });
 }
 
@@ -203,6 +252,128 @@ function validatedGate(value: unknown): ResolveGateInput {
   });
 }
 
+function validatedTaskComment(value: unknown): CreateTaskCommentInput {
+  const input = objectValue(value, "任务评论参数");
+  return Object.freeze({
+    taskId: requiredString(input.taskId, "taskId"),
+    body: textValue(input.body, "body"),
+  });
+}
+
+function validatedCreateSquad(value: unknown): CreateSquadInput {
+  const input = objectValue(value, "创建 Squad 参数");
+  return Object.freeze({
+    name: textValue(input.name, "name"),
+    description: textValue(input.description, "description"),
+    leaderAgentId: textValue(input.leaderAgentId, "leaderAgentId"),
+    memberAgentIds: stringArrayValue(input.memberAgentIds, "memberAgentIds"),
+    leaderInstructions: textValue(input.leaderInstructions, "leaderInstructions"),
+  });
+}
+
+function validatedUpdateSquad(value: unknown): UpdateSquadInput {
+  const input = objectValue(value, "更新 Squad 参数");
+  return Object.freeze({ ...validatedCreateSquad(input), squadId: requiredString(input.squadId, "squadId") });
+}
+
+function validatedAutopilotTemplate(value: unknown): CreateAutopilotInput["taskTemplate"] {
+  const template = objectValue(value, "Autopilot taskTemplate");
+  const priority = textValue(template.priority, "taskTemplate.priority");
+  if (!TASK_PRIORITIES.includes(priority as CreateAutopilotInput["taskTemplate"]["priority"])) {
+    throw new Error(`无效优先级: ${priority}`);
+  }
+  return Object.freeze({
+    title: textValue(template.title, "taskTemplate.title"),
+    description: textValue(template.description, "taskTemplate.description"),
+    acceptanceCriteria: textValue(template.acceptanceCriteria, "taskTemplate.acceptanceCriteria"),
+    priority: priority as CreateAutopilotInput["taskTemplate"]["priority"],
+  });
+}
+
+function validatedCreateAutopilotTrigger(value: unknown): CreateAutopilotInput["trigger"] {
+  const trigger = objectValue(value, "Autopilot trigger");
+  if (trigger.kind === "manual") return Object.freeze({ kind: "manual" });
+  if (trigger.kind === "webhook") return Object.freeze({ kind: "webhook" });
+  if (trigger.kind === "schedule") {
+    if (!Number.isInteger(trigger.intervalMinutes)) throw new Error("trigger.intervalMinutes 必须是整数");
+    return Object.freeze({
+      kind: "schedule",
+      intervalMinutes: trigger.intervalMinutes as number,
+      nextRunAt: textValue(trigger.nextRunAt, "trigger.nextRunAt"),
+    });
+  }
+  throw new Error(`不支持的 Autopilot 触发类型: ${String(trigger.kind)}`);
+}
+
+function validatedCreateAutopilot(value: unknown): CreateAutopilotInput {
+  const input = objectValue(value, "创建 Autopilot 参数");
+  return Object.freeze({
+    name: textValue(input.name, "name"),
+    enabled: booleanValue(input.enabled, "enabled"),
+    trigger: validatedCreateAutopilotTrigger(input.trigger),
+    taskTemplate: validatedAutopilotTemplate(input.taskTemplate),
+    projectPath: textValue(input.projectPath, "projectPath"),
+    projectName: textValue(input.projectName, "projectName"),
+    trusted: booleanValue(input.trusted, "trusted"),
+    executionTarget: validatedExecutionTarget(input.executionTarget),
+  });
+}
+
+function validatedUpdateAutopilot(value: unknown): UpdateAutopilotInput {
+  const input = objectValue(value, "更新 Autopilot 参数");
+  const base = validatedCreateAutopilot(input);
+  const rawTrigger = objectValue(input.trigger, "Autopilot trigger");
+  let trigger: UpdateAutopilotInput["trigger"];
+  if (rawTrigger.kind === "webhook") {
+    trigger = Object.freeze({ kind: "webhook", token: requiredString(rawTrigger.token, "trigger.token") });
+  } else if (rawTrigger.kind === "manual") {
+    trigger = Object.freeze({ kind: "manual" });
+  } else if (rawTrigger.kind === "schedule") {
+    const schedule = validatedCreateAutopilotTrigger(rawTrigger);
+    if (schedule.kind !== "schedule") throw new Error("Autopilot schedule trigger 解析失败");
+    trigger = schedule;
+  } else {
+    throw new Error(`不支持的 Autopilot 触发类型: ${String(rawTrigger.kind)}`);
+  }
+  return Object.freeze({ ...base, autopilotId: requiredString(input.autopilotId, "autopilotId"), trigger });
+}
+
+async function createAutopilotForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  if (!currentProject) throw new Error("尚未选择项目");
+  const input = validatedCreateAutopilot(value);
+  if (resolve(input.projectPath) !== currentProject.cwd) throw new Error("Autopilot 项目必须与当前主进程工作区一致");
+  const project = await getProjectMeta(currentProject);
+  const bootstrap = await autopilotService.create(Object.freeze({
+    ...input,
+    projectPath: project.cwd,
+    projectName: project.name,
+    trusted: project.trusted,
+  }));
+  await scheduleRunner.notify();
+  return bootstrap;
+}
+
+async function updateAutopilotForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  if (!currentProject) throw new Error("尚未选择项目");
+  const input = validatedUpdateAutopilot(value);
+  if (resolve(input.projectPath) !== currentProject.cwd) throw new Error("Autopilot 项目必须与当前主进程工作区一致");
+  const project = await getProjectMeta(currentProject);
+  const bootstrap = await autopilotService.update(Object.freeze({
+    ...input,
+    projectPath: project.cwd,
+    projectName: project.name,
+    trusted: project.trusted,
+  }));
+  await scheduleRunner.notify();
+  return bootstrap;
+}
+
+async function deleteAutopilot(autopilotId: string): Promise<BoardBootstrap> {
+  const bootstrap = await autopilotService.delete(autopilotId);
+  await scheduleRunner.notify();
+  return bootstrap;
+}
+
 async function createBoardTaskForCurrentProject(value: unknown): Promise<BoardBootstrap> {
   if (!currentProject) throw new Error("尚未选择项目");
   const input = validatedCreateTask(value);
@@ -216,6 +387,30 @@ async function createBoardTaskForCurrentProject(value: unknown): Promise<BoardBo
     projectName: project.name,
     trusted: project.trusted,
   }));
+}
+
+async function dispatchBoardTask(taskId: string): Promise<BoardBootstrap> {
+  const state = await boardStore.read();
+  const task = state.tasks.find((candidate) => candidate.id === taskId);
+  if (!task) throw new Error(`找不到任务: ${taskId}`);
+  if (task.executionTarget.kind === "workflow") return workflowOrchestrator.dispatch(taskId);
+  if (task.executionTarget.kind === "agent") {
+    const bootstrap = await agentTaskService.dispatchDirect(taskId);
+    agentTaskRunner.notify();
+    return bootstrap;
+  }
+  const bootstrap = await agentTaskService.dispatchSquad(taskId);
+  agentTaskRunner.notify();
+  return bootstrap;
+}
+
+async function abortBoardTask(taskId: string): Promise<BoardBootstrap> {
+  const state = await boardStore.read();
+  const task = state.tasks.find((candidate) => candidate.id === taskId);
+  if (!task) throw new Error(`找不到任务: ${taskId}`);
+  if (task.activeRunId) return workflowOrchestrator.abort(taskId);
+  if (task.activeAgentTaskId) return agentTaskRunner.abortTask(taskId);
+  throw new Error("任务当前没有可中止的执行");
 }
 
 function dataFromResponse<T>(response: PiResponse, command: string): T {
@@ -451,7 +646,14 @@ function registerIpcHandlers(): void {
     }
     await shell.openExternal(parsed.toString());
   });
-  ipcMain.handle("stella:board:initialize", () => boardService.bootstrap());
+  ipcMain.handle("stella:copy-text", (_event, value: unknown) => {
+    clipboard.writeText(textValue(value, "待复制文本"));
+  });
+  ipcMain.handle("stella:board:initialize", async () => {
+    const bootstrap = await boardService.bootstrap();
+    webhookServer.emitStatus();
+    return bootstrap;
+  });
   ipcMain.handle("stella:board:create-task", (_event, input: unknown) => createBoardTaskForCurrentProject(input));
   ipcMain.handle("stella:board:update-task", (_event, input: unknown) => boardService.updateTask(validatedUpdateTask(input)));
   ipcMain.handle("stella:board:move-task", (_event, taskId: unknown, status: unknown) =>
@@ -460,14 +662,38 @@ function registerIpcHandlers(): void {
   ipcMain.handle("stella:board:delete-task", (_event, taskId: unknown) =>
     boardService.deleteTask(requiredString(taskId, "taskId")),
   );
+  ipcMain.handle("stella:board:add-comment", (_event, input: unknown) =>
+    agentTaskService.addComment(validatedTaskComment(input)),
+  );
+  ipcMain.handle("stella:board:create-squad", (_event, input: unknown) =>
+    squadService.create(validatedCreateSquad(input)),
+  );
+  ipcMain.handle("stella:board:update-squad", (_event, input: unknown) =>
+    squadService.update(validatedUpdateSquad(input)),
+  );
+  ipcMain.handle("stella:board:delete-squad", (_event, squadId: unknown) =>
+    squadService.delete(requiredString(squadId, "squadId")),
+  );
+  ipcMain.handle("stella:board:create-autopilot", (_event, input: unknown) =>
+    createAutopilotForCurrentProject(input),
+  );
+  ipcMain.handle("stella:board:update-autopilot", (_event, input: unknown) =>
+    updateAutopilotForCurrentProject(input),
+  );
+  ipcMain.handle("stella:board:delete-autopilot", (_event, autopilotId: unknown) =>
+    deleteAutopilot(requiredString(autopilotId, "autopilotId")),
+  );
+  ipcMain.handle("stella:board:trigger-autopilot", (_event, autopilotId: unknown) =>
+    autopilotService.trigger({ autopilotId: requiredString(autopilotId, "autopilotId"), triggerKind: "manual" }),
+  );
   ipcMain.handle("stella:board:dispatch-task", (_event, taskId: unknown) =>
-    workflowOrchestrator.dispatch(requiredString(taskId, "taskId")),
+    dispatchBoardTask(requiredString(taskId, "taskId")),
   );
   ipcMain.handle("stella:board:resolve-gate", (_event, input: unknown) =>
     workflowOrchestrator.resolveGate(validatedGate(input)),
   );
   ipcMain.handle("stella:board:abort-task", (_event, taskId: unknown) =>
-    workflowOrchestrator.abort(requiredString(taskId, "taskId")),
+    abortBoardTask(requiredString(taskId, "taskId")),
   );
   ipcMain.handle("stella:window-action", (_event, action: unknown) => {
     if (!mainWindow) return;
@@ -518,7 +744,17 @@ function createWindow(): void {
   }
 }
 
-void app.whenReady().then(async () => {
+if (!singleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  void app.whenReady().then(async () => {
   stateStore = new StateStore(join(app.getPath("userData"), "stella-state.json"));
   boardStore = new BoardStore(join(app.getPath("userData"), "board", "board.json"));
   await boardStore.initialize();
@@ -534,16 +770,52 @@ void app.whenReady().then(async () => {
     runtimeFactory: workflowRuntimeFactory,
     emitBoardEvent: (event) => broadcast("board", event),
   });
+  agentTaskService = new AgentTaskService({
+    repository: boardStore,
+    catalog: BUILTIN_ORCHESTRATION_CATALOG,
+    emitChanged: emitSnapshot,
+  });
+  squadService = new SquadService({
+    repository: boardStore,
+    catalog: BUILTIN_ORCHESTRATION_CATALOG,
+    emitChanged: emitSnapshot,
+  });
+  autopilotService = new AutopilotService({
+    repository: boardStore,
+    catalog: BUILTIN_ORCHESTRATION_CATALOG,
+    dispatchTask: dispatchBoardTask,
+    emitChanged: emitSnapshot,
+  });
+  scheduleRunner = new ScheduleRunner({
+    repository: boardStore,
+    autopilotService,
+    emitBoardEvent: (event) => broadcast("board", event),
+  });
+  webhookServer = new WebhookServer({
+    autopilotService,
+    emitBoardEvent: (event) => broadcast("board", event),
+    port: webhookPortFromEnvironment(process.env.STELLA_WEBHOOK_PORT),
+    maxBodyBytes: webhookMaxBytesFromEnvironment(process.env.STELLA_WEBHOOK_MAX_BYTES),
+  });
+  agentTaskRunner = new AgentTaskRunner({
+    service: agentTaskService,
+    runtimeFactory: agentTaskRuntimeFactory,
+    emitBoardEvent: (event) => broadcast("board", event),
+  });
   registerIpcHandlers();
   createWindow();
+  agentTaskRunner.start();
+  await scheduleRunner.start();
+  await webhookServer.start();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-}).catch((error: unknown) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error);
-  dialog.showErrorBox("Stella 启动失败", message);
-  app.quit();
-});
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    dialog.showErrorBox("Stella 启动失败", message);
+    app.quit();
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
@@ -556,8 +828,15 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   if (shutdownStarted) return;
   shutdownStarted = true;
-  void Promise.all([runtime.stop(), workflowOrchestrator?.shutdown()]).finally(() => {
-    shutdownComplete = true;
-    app.quit();
-  });
+  void Promise.all([runtime.stop(), workflowOrchestrator?.shutdown(), agentTaskRunner?.shutdown(), scheduleRunner?.stop(), webhookServer?.stop()])
+    .then(() => {
+      shutdownComplete = true;
+      app.quit();
+    })
+    .catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.stack ?? cause.message : String(cause);
+      dialog.showErrorBox("Stella 关闭失败", message);
+      shutdownComplete = true;
+      app.exit(1);
+    });
 });

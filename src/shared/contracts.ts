@@ -10,10 +10,15 @@ import type {
 import type {
   BoardBootstrap,
   BoardBridgeEvent,
+  CreateAutopilotInput,
+  CreateTaskCommentInput,
+  CreateSquadInput,
   CreateTaskInput,
   ManualTaskStatus,
   ResolveGateInput,
   UpdateTaskInput,
+  UpdateAutopilotInput,
+  UpdateSquadInput,
 } from "./kanban";
 
 type WithoutRequestId<T> = T extends { id?: string } ? Omit<T, "id"> : never;
@@ -193,11 +198,20 @@ export interface StellaDesktopApi {
   openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap>;
   revealPath(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;
+  copyText(value: string): Promise<void>;
   boardInitialize(): Promise<BoardBootstrap>;
   boardCreateTask(input: CreateTaskInput): Promise<BoardBootstrap>;
   boardUpdateTask(input: UpdateTaskInput): Promise<BoardBootstrap>;
   boardMoveTask(taskId: string, status: ManualTaskStatus): Promise<BoardBootstrap>;
   boardDeleteTask(taskId: string): Promise<BoardBootstrap>;
+  boardAddComment(input: CreateTaskCommentInput): Promise<BoardBootstrap>;
+  boardCreateSquad(input: CreateSquadInput): Promise<BoardBootstrap>;
+  boardUpdateSquad(input: UpdateSquadInput): Promise<BoardBootstrap>;
+  boardDeleteSquad(squadId: string): Promise<BoardBootstrap>;
+  boardCreateAutopilot(input: CreateAutopilotInput): Promise<BoardBootstrap>;
+  boardUpdateAutopilot(input: UpdateAutopilotInput): Promise<BoardBootstrap>;
+  boardDeleteAutopilot(autopilotId: string): Promise<BoardBootstrap>;
+  boardTriggerAutopilot(autopilotId: string): Promise<BoardBootstrap>;
   boardDispatchTask(taskId: string): Promise<BoardBootstrap>;
   boardResolveGate(input: ResolveGateInput): Promise<BoardBootstrap>;
   boardAbortTask(taskId: string): Promise<BoardBootstrap>;

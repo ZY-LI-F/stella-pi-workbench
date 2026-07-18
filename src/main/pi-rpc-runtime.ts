@@ -138,6 +138,19 @@ export class PiRpcRuntime {
     });
   }
 
+  async abortAndStop(): Promise<void> {
+    let abortError: unknown;
+    if (this.running) {
+      try {
+        await this.send({ type: "abort" });
+      } catch (error) {
+        abortError = error;
+      }
+    }
+    await this.stop();
+    if (abortError) throw abortError;
+  }
+
   send(command: PiCommand): Promise<PiResponse> {
     const child = this.#process;
     if (!child || child.exitCode !== null || !child.stdin.writable) {

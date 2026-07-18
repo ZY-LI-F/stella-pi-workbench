@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { BoardRepository } from "./board-repository";
 import {
-  BOARD_SCHEMA_VERSION,
   TASK_PRIORITIES,
   canMoveTaskManually,
   type BoardBootstrap,
   type BoardState,
   type CreateTaskInput,
+  type ExecutionTarget,
   type KanbanTask,
   type ManualTaskStatus,
   type OrchestrationCatalog,
@@ -48,52 +48,51 @@ export class BoardService {
   }
 
   async createTask(input: CreateTaskInput): Promise<BoardBootstrap> {
-    this.#assertWorkflow(input.workflowId);
     if (!TASK_PRIORITIES.includes(input.priority)) throw new Error(`无效优先级: ${String(input.priority)}`);
     const now = this.#now();
-    const task: KanbanTask = Object.freeze({
-      id: this.#id(),
-      title: normalizedText(input.title, "任务标题", true),
-      description: normalizedText(input.description, "任务说明", false),
-      acceptanceCriteria: normalizedText(input.acceptanceCriteria, "验收标准", false),
-      priority: input.priority,
-      projectPath: normalizedText(input.projectPath, "项目路径", true),
-      projectName: normalizedText(input.projectName, "项目名称", true),
-      trusted: input.trusted,
-      workflowId: input.workflowId,
-      status: "planned",
-      createdAt: now,
-      updatedAt: now,
+    return this.#commit((current) => {
+      this.#assertExecutionTarget(current, input.executionTarget);
+      const task: KanbanTask = Object.freeze({
+        id: this.#id(),
+        title: normalizedText(input.title, "任务标题", true),
+        description: normalizedText(input.description, "任务说明", false),
+        acceptanceCriteria: normalizedText(input.acceptanceCriteria, "验收标准", false),
+        priority: input.priority,
+        projectPath: normalizedText(input.projectPath, "项目路径", true),
+        projectName: normalizedText(input.projectName, "项目名称", true),
+        trusted: input.trusted,
+        executionTarget: Object.freeze({ ...input.executionTarget }),
+        status: "planned",
+        createdAt: now,
+        updatedAt: now,
+      });
+      return {
+        ...current,
+        tasks: [task, ...current.tasks],
+        activities: [...current.activities, this.#activity(task.id, "task", "任务已创建", undefined, now)],
+      };
     });
-    const activity = this.#activity(task.id, "task", "任务已创建", undefined, now);
-    return this.#commit((current) => ({
-      version: BOARD_SCHEMA_VERSION,
-      tasks: [task, ...current.tasks],
-      runs: current.runs,
-      activities: [...current.activities, activity],
-    }));
   }
 
   async updateTask(input: UpdateTaskInput): Promise<BoardBootstrap> {
-    this.#assertWorkflow(input.workflowId);
     if (!TASK_PRIORITIES.includes(input.priority)) throw new Error(`无效优先级: ${String(input.priority)}`);
     const now = this.#now();
     return this.#commit((current) => {
       const task = this.#task(current, input.taskId);
-      if (task.activeRunId) throw new Error("运行中的任务不能编辑；请先中止流程");
+      if (task.activeRunId || task.activeAgentTaskId) throw new Error("运行中的任务不能编辑；请先中止执行");
+      this.#assertExecutionTarget(current, input.executionTarget);
       const nextTask: KanbanTask = Object.freeze({
         ...task,
         title: normalizedText(input.title, "任务标题", true),
         description: normalizedText(input.description, "任务说明", false),
         acceptanceCriteria: normalizedText(input.acceptanceCriteria, "验收标准", false),
         priority: input.priority,
-        workflowId: input.workflowId,
+        executionTarget: Object.freeze({ ...input.executionTarget }),
         updatedAt: now,
       });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id ? nextTask : candidate),
-        runs: current.runs,
         activities: [...current.activities, this.#activity(task.id, "task", "任务内容已更新", undefined, now)],
       };
     });
@@ -113,9 +112,8 @@ export class BoardService {
         updatedAt: now,
       });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id ? nextTask : candidate),
-        runs: current.runs,
         activities: [...current.activities, this.#activity(task.id, "status", `任务已移到${status === "planned" ? "待规划" : status === "blocked" ? "受阻" : "已完成"}`, undefined, now)],
       };
     });
@@ -124,12 +122,14 @@ export class BoardService {
   async deleteTask(taskId: string): Promise<BoardBootstrap> {
     return this.#commit((current) => {
       const task = this.#task(current, taskId);
-      if (task.activeRunId) throw new Error("运行中的任务不能删除；请先中止流程");
+      if (task.activeRunId || task.activeAgentTaskId) throw new Error("运行中的任务不能删除；请先中止执行");
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.filter((candidate) => candidate.id !== task.id),
         runs: current.runs.filter((run) => run.taskId !== task.id),
         activities: current.activities.filter((activity) => activity.taskId !== task.id),
+        comments: current.comments.filter((comment) => comment.taskId !== task.id),
+        agentTasks: current.agentTasks.filter((agentTask) => agentTask.taskId !== task.id),
       };
     });
   }
@@ -140,9 +140,15 @@ export class BoardService {
     return task;
   }
 
-  #assertWorkflow(workflowId: string): void {
-    if (!this.#catalog.workflows.some((workflow) => workflow.id === workflowId)) {
-      throw new Error(`未知流程模板: ${workflowId}`);
+  #assertExecutionTarget(state: BoardState, target: ExecutionTarget): void {
+    if (target.kind === "workflow" && !this.#catalog.workflows.some((workflow) => workflow.id === target.workflowId)) {
+      throw new Error(`未知流程模板: ${target.workflowId}`);
+    }
+    if (target.kind === "agent" && !this.#catalog.agents.some((agent) => agent.id === target.agentId)) {
+      throw new Error(`未知 Agent: ${target.agentId}`);
+    }
+    if (target.kind === "squad" && !state.squads.some((squad) => squad.id === target.squadId)) {
+      throw new Error(`未知 Squad: ${target.squadId}`);
     }
   }
 

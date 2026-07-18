@@ -63,7 +63,8 @@ async function setup(runtimeFactory = new FakeRuntimeFactory()) {
   const service = new BoardService({ repository, catalog: BUILTIN_ORCHESTRATION_CATALOG, emitChanged: () => undefined, id, now: () => "2026-07-17T00:00:00.000Z" });
   await service.createTask({
     title: "实现固定流程", description: "真实执行", acceptanceCriteria: "经过人工关卡", priority: "high",
-    projectPath: "C:/project", projectName: "project", trusted: true, workflowId: "feature-delivery",
+    projectPath: "C:/project", projectName: "project", trusted: true,
+    executionTarget: { kind: "workflow", workflowId: "feature-delivery" },
   });
   const taskId = repository.state.tasks[0]?.id;
   if (!taskId) throw new Error("测试任务未创建");
@@ -124,5 +125,28 @@ describe("WorkflowOrchestrator", () => {
     expect(runtimeFactory.runtimes[0]?.running).toBe(false);
     expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(false);
     expect(repository.state.tasks[0]?.status).toBe("interrupted");
+  });
+
+  it("keeps abort terminal when a late Agent settlement arrives", async () => {
+    const { repository, runtimeFactory, orchestrator, taskId } = await setup();
+    await orchestrator.dispatch(taskId);
+    await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(true));
+    const runtime = runtimeFactory.runtimes[0];
+    await orchestrator.abort(taskId);
+    runtime?.settle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(repository.state.tasks[0]?.status).toBe("interrupted");
+    expect(repository.state.runs[0]?.status).toBe("interrupted");
+    expect(repository.state.runs[0]?.steps[0]?.artifact).toBeUndefined();
+  });
+
+  it("persists interruption before stopping active runtimes during shutdown", async () => {
+    const { repository, runtimeFactory, orchestrator, taskId } = await setup();
+    await orchestrator.dispatch(taskId);
+    await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(true));
+    await orchestrator.shutdown();
+    expect(repository.state.tasks[0]?.status).toBe("interrupted");
+    expect(repository.state.runs[0]?.status).toBe("interrupted");
+    expect(runtimeFactory.runtimes[0]?.stop).toHaveBeenCalled();
   });
 });

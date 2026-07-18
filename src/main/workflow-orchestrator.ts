@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PiCommand, PiResponse, RuntimeSignal } from "../shared/contracts";
 import {
-  BOARD_SCHEMA_VERSION,
   type AgentArtifact,
   type AgentDefinition,
   type BoardBootstrap,
@@ -124,9 +123,10 @@ export class WorkflowOrchestrator {
     let runId = "";
     const bootstrap = await this.#commit((current) => {
       const task = this.#task(current, taskId);
-      if (task.activeRunId) throw new Error("任务已有正在进行的流程");
+      if (task.activeRunId || task.activeAgentTaskId) throw new Error("任务已有正在进行的执行");
       if (task.status === "completed") throw new Error("已完成任务需先移回待规划列才能重新分发");
-      const workflowDefinition = this.#workflow(task.workflowId);
+      if (task.executionTarget.kind !== "workflow") throw new Error("任务的执行目标不是固定流程");
+      const workflowDefinition = this.#workflow(task.executionTarget.workflowId);
       const workflow = cloneWorkflow(workflowDefinition);
       const agentIds = new Set(workflow.steps.filter((step) => step.kind === "agent").map((step) => step.agentId));
       const agents = Object.freeze([...agentIds].map((id) => cloneAgent(this.#agent(id))));
@@ -156,7 +156,7 @@ export class WorkflowOrchestrator {
         updatedAt: now,
       });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id ? nextTask : candidate),
         runs: [run, ...current.runs],
         activities: [...current.activities, this.#activity(task.id, "dispatch", `已分发「${workflow.shortName}」`, "等待第一个执行角色", now, run.id)],
@@ -203,7 +203,7 @@ export class WorkflowOrchestrator {
           updatedAt: now,
         });
         return {
-          version: BOARD_SCHEMA_VERSION,
+          ...current,
           tasks: current.tasks.map((candidate) => candidate.id === task.id ? blockedTask : candidate),
           runs: current.runs.map((candidate) => candidate.id === run.id ? blockedRun : candidate),
           activities: [...current.activities, this.#activity(task.id, "gate", `${step.name}已驳回`, comment || undefined, now, run.id, step.stepId)],
@@ -225,7 +225,7 @@ export class WorkflowOrchestrator {
       });
       const runningTask: KanbanTask = Object.freeze({ ...task, status: "running", updatedAt: now });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id ? runningTask : candidate),
         runs: current.runs.map((candidate) => candidate.id === run.id ? runningRun : candidate),
         activities: [...current.activities, this.#activity(task.id, "gate", `${step.name}已批准`, comment || undefined, now, run.id, step.stepId)],
@@ -241,13 +241,13 @@ export class WorkflowOrchestrator {
     if (!task.activeRunId) throw new Error("任务当前没有可中止的流程");
     const runId = task.activeRunId;
     const active = this.#activeAgents.get(runId);
-    this.#activeAgents.delete(runId);
-    if (active) await active.runtime.stop();
-    this.#releaseWriter(runId, task.projectPath);
     const now = this.#now();
-    return this.#commit((current) => {
+    const bootstrap = await this.#commit((current) => {
       const latestTask = this.#task(current, taskId);
       const run = this.#run(current, runId);
+      if (["failed", "blocked", "interrupted", "completed"].includes(run.status)) {
+        throw new Error("流程已经进入终态，不能再次中止");
+      }
       const interruptedRun: WorkflowRun = Object.freeze({
         ...run,
         status: "interrupted",
@@ -266,17 +266,64 @@ export class WorkflowOrchestrator {
         updatedAt: now,
       });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === taskId ? interruptedTask : candidate),
         runs: current.runs.map((candidate) => candidate.id === runId ? interruptedRun : candidate),
         activities: [...current.activities, this.#activity(taskId, "status", "流程已由用户中止", undefined, now, runId)],
       };
     });
+    this.#activeAgents.delete(runId);
+    this.#releaseWriter(runId, task.projectPath);
+    if (active) await active.runtime.stop();
+    return bootstrap;
   }
 
   async shutdown(): Promise<void> {
     const active = [...this.#activeAgents.values()];
+    const now = this.#now();
+    const activeRunIds = new Set(active.map((entry) => entry.runId));
+    if (activeRunIds.size > 0) {
+      await this.#repository.update((current) => {
+        const tasksByRunId = new Map(current.tasks.filter((task) => task.activeRunId).map((task) => [task.activeRunId as string, task]));
+        const interruptedRunIds = new Set(current.runs
+          .filter((run) => activeRunIds.has(run.id) && (run.status === "queued" || run.status === "running"))
+          .map((run) => run.id));
+        if (interruptedRunIds.size === 0) return current;
+        const activities = [...interruptedRunIds].map((runId) => {
+          const task = tasksByRunId.get(runId);
+          if (!task) throw new Error(`关闭时找不到流程 ${runId} 对应的任务`);
+          return this.#activity(task.id, "error", "应用关闭，流程已中断", "运行进程已在持久化终态后停止。", now, runId);
+        });
+        return {
+          ...current,
+          tasks: current.tasks.map((task) => task.activeRunId && interruptedRunIds.has(task.activeRunId)
+            ? Object.freeze({
+                ...task,
+                status: "interrupted" as const,
+                activeRunId: undefined,
+                blockedReason: "Stella 在流程运行期间关闭。",
+                updatedAt: now,
+              })
+            : task),
+          runs: current.runs.map((run) => interruptedRunIds.has(run.id)
+            ? Object.freeze({
+                ...run,
+                status: "interrupted" as const,
+                currentStepId: undefined,
+                steps: Object.freeze(run.steps.map((step) => step.status === "running"
+                  ? Object.freeze({ ...step, status: "interrupted" as const, error: "应用关闭", completedAt: now })
+                  : step)),
+                updatedAt: now,
+                completedAt: now,
+              })
+            : run),
+          activities: [...current.activities, ...activities],
+        };
+      });
+    }
     this.#activeAgents.clear();
+    this.#writerLocks.clear();
+    this.#writerQueues.clear();
     await Promise.all(active.map((entry) => entry.runtime.stop()));
   }
 
@@ -312,7 +359,7 @@ export class WorkflowOrchestrator {
       const latestTask = this.#task(current, task.id);
       const waitingStep: StepRun = Object.freeze({ ...step, status: "waiting", startedAt: now });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
           ? Object.freeze({ ...latestTask, status: "review" as const, updatedAt: now })
           : candidate),
@@ -336,7 +383,7 @@ export class WorkflowOrchestrator {
       const latestRun = this.#run(current, run.id);
       const latestTask = this.#task(current, task.id);
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
           ? Object.freeze({ ...latestTask, status: "queued" as const, updatedAt: now })
           : candidate),
@@ -375,7 +422,7 @@ export class WorkflowOrchestrator {
       const latestTask = this.#task(current, task.id);
       const runningStep: StepRun = Object.freeze({ ...step, status: "running", startedAt: now });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
           ? Object.freeze({ ...latestTask, status: "running" as const, updatedAt: now })
           : candidate),
@@ -489,8 +536,17 @@ export class WorkflowOrchestrator {
       }
       const state = responseData<RpcStateData>(stateResponse, "get_state");
       const stats = responseData<RpcStatsData>(statsResponse, "get_session_stats");
+      if (this.#activeAgents.get(active.runId) !== active) {
+        await active.runtime.stop();
+        return;
+      }
       const board = await this.#repository.read();
       const run = this.#run(board, active.runId);
+      if (["failed", "blocked", "interrupted", "completed"].includes(run.status)) {
+        this.#activeAgents.delete(active.runId);
+        await active.runtime.stop();
+        return;
+      }
       const step = run.steps.find((candidate) => candidate.stepId === active.stepId);
       if (!step) throw new Error(`找不到运行步骤: ${active.stepId}`);
       const artifact: AgentArtifact = Object.freeze({
@@ -505,9 +561,12 @@ export class WorkflowOrchestrator {
       await this.#commit((current) => {
         const latestRun = this.#run(current, active.runId);
         const latestTask = this.#task(current, active.taskId);
+        if (this.#activeAgents.get(active.runId) !== active || latestTask.activeRunId !== active.runId || latestRun.status !== "running") {
+          return current;
+        }
         const completedStep: StepRun = Object.freeze({ ...step, status: "succeeded", completedAt: now, sessionPath: state.sessionFile, artifact });
         return {
-          version: BOARD_SCHEMA_VERSION,
+          ...current,
           tasks: current.tasks.map((candidate) => candidate.id === active.taskId
             ? Object.freeze({ ...latestTask, status: "running" as const, updatedAt: now })
             : candidate),
@@ -538,7 +597,7 @@ export class WorkflowOrchestrator {
       const latestRun = this.#run(current, run.id);
       const latestTask = this.#task(current, task.id);
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
           ? Object.freeze({ ...latestTask, status: "completed" as const, activeRunId: undefined, blockedReason: undefined, updatedAt: now })
           : candidate),
@@ -582,7 +641,7 @@ export class WorkflowOrchestrator {
         updatedAt: now,
       });
       return {
-        version: BOARD_SCHEMA_VERSION,
+        ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id ? failedTask : candidate),
         runs: current.runs.map((candidate) => candidate.id === runId ? failedRun : candidate),
         activities: [...current.activities, this.#activity(task.id, "error", "流程执行失败", message, now, runId, latestRun.currentStepId)],

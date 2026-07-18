@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 interface ModalProps {
@@ -49,7 +50,7 @@ export function Modal({ title, eyebrow, children, onClose, className = "", hideC
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div className="modal-layer" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
@@ -60,6 +61,7 @@ export function Modal({ title, eyebrow, children, onClose, className = "", hideC
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
