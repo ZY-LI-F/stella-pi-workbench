@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   EMPTY_BOARD_STATE,
+  BOARD_SCHEMA_V3,
   BOARD_SCHEMA_V2,
   LEGACY_BOARD_SCHEMA_VERSION,
   parseBoardFile,
@@ -10,6 +11,7 @@ import {
   type BoardState,
   type TaskActivity,
 } from "../shared/kanban";
+import { applyTaskLifecycle } from "../shared/task-lifecycle";
 import type { BoardRepository } from "./board-repository";
 
 interface BoardStoreDependencies {
@@ -67,18 +69,16 @@ export class BoardStore implements BoardRepository {
         ...current,
         tasks: current.tasks.map((task) => {
           if (interruptedIds.has(task.activeRunId ?? "")) {
-            return Object.freeze({
+            return applyTaskLifecycle(Object.freeze({
               ...task,
               activeRunId: undefined,
-              updatedAt: now,
-            });
+            }), { type: "execution-interrupted", reason: "应用重启，流程已中断" }, now);
           }
           if (interruptedAgentTaskIds.has(task.activeAgentTaskId ?? "")) {
-            return Object.freeze({
+            return applyTaskLifecycle(Object.freeze({
               ...task,
               activeAgentTaskId: undefined,
-              updatedAt: now,
-            });
+            }), { type: "execution-interrupted", reason: "应用重启，Agent 执行已中断" }, now);
           }
           return task;
         }),
@@ -140,7 +140,7 @@ export class BoardStore implements BoardRepository {
       const sourceVersion = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>).version
         : undefined;
-      if (sourceVersion === LEGACY_BOARD_SCHEMA_VERSION || sourceVersion === BOARD_SCHEMA_V2) {
+      if (sourceVersion === LEGACY_BOARD_SCHEMA_VERSION || sourceVersion === BOARD_SCHEMA_V2 || sourceVersion === BOARD_SCHEMA_V3) {
         const timestamp = this.#dependencies.now().replaceAll(":", "-");
         const backupPath = `${this.#path}.v${sourceVersion}.${timestamp}.${this.#dependencies.id()}.bak`;
         await copyFile(this.#path, backupPath);

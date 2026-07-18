@@ -156,10 +156,10 @@ describe("Kanban automation interactions", () => {
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("补充上下文；用 @builder 或 @BUILD 可直接委派…"), "请先读取现有测试");
+    await user.type(screen.getByPlaceholderText("补充上下文；用 @lead 调度团队，或 @builder 直接委派…"), "请先读取现有测试");
     await user.click(screen.getByRole("button", { name: "发送评论" }));
     await waitFor(() => expect(onAddComment).toHaveBeenCalledWith("请先读取现有测试"));
-    expect((screen.getByPlaceholderText("补充上下文；用 @builder 或 @BUILD 可直接委派…") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByPlaceholderText("补充上下文；用 @lead 调度团队，或 @builder 直接委派…") as HTMLTextAreaElement).value).toBe("");
   });
 
   it("previews every AgentTask side effect before an @mention message is submitted", async () => {
@@ -190,7 +190,7 @@ describe("Kanban automation interactions", () => {
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("补充上下文；用 @builder 或 @BUILD 可直接委派…"), "@builder 实现后交给 @VERIFY 验证");
+    await user.type(screen.getByPlaceholderText("补充上下文；用 @lead 调度团队，或 @builder 直接委派…"), "@builder 实现后交给 @VERIFY 验证");
     expect(screen.getByRole("status").textContent).toContain("提交后将创建 2 个 AgentTask");
     expect(screen.getByRole("status").textContent).toContain("实现工程师 (@builder)");
     expect(screen.getByRole("status").textContent).toContain("验证工程师 (@tester)");

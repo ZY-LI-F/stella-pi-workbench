@@ -2,6 +2,7 @@ import type { PiCommand, PiResponse, RuntimeSignal } from "../shared/contracts";
 import type { BoardBootstrap, BoardBridgeEvent } from "../shared/kanban";
 import { backgroundSessionName } from "../shared/session-policy";
 import type { PiRuntimeStartOptions } from "./pi-rpc-runtime";
+import { assertRequiredAgentSkills, requiredSkillsPrompt } from "./required-agent-skills";
 import { AgentTaskService, type ClaimedAgentTask } from "./agent-task-service";
 import {
   WorkspaceAdmission,
@@ -224,11 +225,16 @@ export class AgentTaskRunner {
         model: agent.model,
         thinking: agent.thinking,
         allowedTools: agent.allowedTools,
-        appendSystemPrompt: agent.instructions,
+        appendSystemPrompt: requiredSkillsPrompt(agent),
         disableExtensions: agent.disableExtensions,
         disableSkills: agent.disableSkills,
         disablePromptTemplates: agent.disablePromptTemplates,
       });
+      if (this.#active !== active || this.#stopping) {
+        await runtime.stop();
+        return;
+      }
+      await assertRequiredAgentSkills(runtime, agent);
       if (this.#active !== active || this.#stopping) {
         await runtime.stop();
         return;

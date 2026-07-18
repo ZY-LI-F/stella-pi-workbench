@@ -12,9 +12,12 @@ import {
   type JsonObject,
   type KanbanTask,
   type OrchestrationCatalog,
+  type ProjectAgentDefinition,
   type TaskActivity,
   type UpdateAutopilotInput,
 } from "../shared/kanban";
+import { catalogForBoard } from "../shared/orchestration-catalog";
+import { applyTaskLifecycle } from "../shared/task-lifecycle";
 
 interface AutopilotServiceDependencies {
   readonly repository: BoardRepository;
@@ -154,7 +157,7 @@ export class AutopilotService {
       return changed ? { ...current, autopilots, autopilotRuns: [...missedRuns, ...current.autopilotRuns] } : current;
     });
     if (!changed) return undefined;
-    const bootstrap = Object.freeze({ board, catalog: this.#catalog });
+    const bootstrap = Object.freeze({ board, catalog: catalogForBoard(this.#catalog, board) });
     this.#emitChanged(bootstrap);
     return bootstrap;
   }
@@ -200,7 +203,7 @@ export class AutopilotService {
       } else if (input.expectedScheduleAt) {
         throw new Error(`${autopilot.trigger.kind} 触发不能携带 expectedScheduleAt`);
       }
-      this.#assertExecutionTarget(current, autopilot.executionTarget);
+      this.#assertExecutionTarget(current, autopilot.executionTarget, autopilot.projectPath);
       const payloadText = input.requestPayload ? `\n\nWebhook payload:\n${JSON.stringify(input.requestPayload, null, 2)}` : "";
       const task: KanbanTask = Object.freeze({
         id: taskId,
@@ -249,6 +252,9 @@ export class AutopilotService {
       const completedAt = this.#now();
       await this.#commit((current) => ({
         ...current,
+        tasks: current.tasks.map((task) => task.id === taskId
+          ? applyTaskLifecycle(task, { type: "execution-failed", reason: `Autopilot 分发失败：${message}` }, completedAt)
+          : task),
         autopilotRuns: current.autopilotRuns.map((run) => run.id === runId
           ? Object.freeze({ ...run, status: "failed" as const, error: message, completedAt })
           : run),
@@ -263,7 +269,7 @@ export class AutopilotService {
     input: CreateAutopilotInput | UpdateAutopilotInput,
   ): Omit<Autopilot, "id" | "createdAt" | "updatedAt" | "trigger"> & { readonly trigger: CreateAutopilotInput["trigger"] | AutopilotTrigger } {
     if (!TASK_PRIORITIES.includes(input.taskTemplate.priority)) throw new Error(`无效优先级: ${String(input.taskTemplate.priority)}`);
-    this.#assertExecutionTarget(state, input.executionTarget);
+    this.#assertExecutionTarget(state, input.executionTarget, input.projectPath);
     if (input.trigger.kind === "schedule") {
       if (!Number.isInteger(input.trigger.intervalMinutes) || input.trigger.intervalMinutes <= 0) throw new Error("计划间隔必须是正整数分钟");
       if (Number.isNaN(Date.parse(input.trigger.nextRunAt))) throw new Error("nextRunAt 不是有效日期");
@@ -286,10 +292,23 @@ export class AutopilotService {
     });
   }
 
-  #assertExecutionTarget(state: BoardState, target: ExecutionTarget): void {
+  #assertExecutionTarget(state: BoardState, target: ExecutionTarget, projectPath: string): void {
     if (target.kind === "workflow" && !this.#catalog.workflows.some((workflow) => workflow.id === target.workflowId)) throw new Error(`未知流程模板: ${target.workflowId}`);
-    if (target.kind === "agent" && !this.#catalog.agents.some((agent) => agent.id === target.agentId)) throw new Error(`未知 Agent: ${target.agentId}`);
-    if (target.kind === "squad" && !state.squads.some((squad) => squad.id === target.squadId)) throw new Error(`未知 Squad: ${target.squadId}`);
+    if (target.kind === "agent") {
+      const agent = catalogForBoard(this.#catalog, state).agents.find((candidate) => candidate.id === target.agentId);
+      if (!agent) throw new Error(`未知 Agent: ${target.agentId}`);
+      const scoped = agent as Partial<ProjectAgentDefinition>;
+      if (scoped.projectPath && scoped.projectPath !== projectPath) throw new Error(`Agent ${agent.id} 属于其他项目`);
+    }
+    if (target.kind === "squad") {
+      const squad = state.squads.find((candidate) => candidate.id === target.squadId);
+      if (!squad) throw new Error(`未知 Squad: ${target.squadId}`);
+      const catalog = catalogForBoard(this.#catalog, state);
+      const scopedAgents = [squad.leaderAgentId, ...squad.memberAgentIds]
+        .map((agentId) => catalog.agents.find((agent) => agent.id === agentId) as Partial<ProjectAgentDefinition> | undefined)
+        .filter((agent): agent is Partial<ProjectAgentDefinition> => Boolean(agent?.projectPath));
+      if (scopedAgents.some((agent) => agent.projectPath !== projectPath)) throw new Error(`Squad ${squad.id} 包含其他项目的自定义 Agent`);
+    }
   }
 
   #autopilot(state: BoardState, autopilotId: string): Autopilot {
@@ -304,7 +323,7 @@ export class AutopilotService {
 
   async #commit(transform: (current: BoardState) => BoardState): Promise<BoardBootstrap> {
     const board = await this.#repository.update(transform);
-    const bootstrap = Object.freeze({ board, catalog: this.#catalog });
+    const bootstrap = Object.freeze({ board, catalog: catalogForBoard(this.#catalog, board) });
     this.#emitChanged(bootstrap);
     return bootstrap;
   }

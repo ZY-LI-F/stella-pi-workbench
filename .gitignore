@@ -5,6 +5,7 @@ release/
 coverage/
 test-results/
 playwright-report/
+examples/pharma-early-research/evidence/e2e/*.json
 *.log
 *.tsbuildinfo
 .DS_Store

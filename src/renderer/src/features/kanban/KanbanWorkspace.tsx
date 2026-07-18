@@ -18,6 +18,7 @@ import {
   type KanbanTask,
   type ManualTaskStage,
   type OrchestrationCatalog,
+  type ProjectAgentDefinition,
   type Squad,
   type WorkflowDefinition,
 } from "@shared/kanban";
@@ -314,7 +315,7 @@ export function KanbanWorkspace({
           draft={editorTaskId === "new" ? newTaskDraft : undefined}
           project={editorProject}
           workflows={catalog.workflows}
-          agents={catalog.agents}
+          agents={catalog.agents.filter((agent) => !("projectPath" in agent) || (agent as ProjectAgentDefinition).projectPath === editorProject.cwd)}
           squads={board.squads}
           busy={state.pending.includes(editorTaskId === "new" ? "create" : editorTaskId)}
           onClose={() => setEditorTaskId(undefined)}
@@ -325,7 +326,10 @@ export function KanbanWorkspace({
       {catalogOpen && <CatalogDialog catalog={catalog} onClose={() => setCatalogOpen(false)} />}
       {automationOpen && project && (
         <AutomationStudioDialog
-          catalog={catalog}
+          catalog={Object.freeze({
+            ...catalog,
+            agents: Object.freeze(catalog.agents.filter((agent) => !("projectPath" in agent) || (agent as ProjectAgentDefinition).projectPath === project.cwd)),
+          })}
           project={project}
           squads={board.squads}
           autopilots={board.autopilots}

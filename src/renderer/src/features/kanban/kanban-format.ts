@@ -33,6 +33,7 @@ export const EXECUTION_STATUS_LABEL: Readonly<Record<string, string>> = Object.f
   review: "人工关卡",
   blocked: "流程受阻",
   waiting_children: "等待子任务",
+  waiting_human: "等待用户",
   reported: "已报告",
   failed: "执行失败",
   interrupted: "已中断",

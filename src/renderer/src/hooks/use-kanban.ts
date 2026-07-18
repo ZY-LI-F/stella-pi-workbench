@@ -5,6 +5,7 @@ import type {
   BoardBootstrap,
   BoardBridgeEvent,
   CreateAutopilotInput,
+  CreateProjectAgentInput,
   CreateTaskInput,
   CreateTaskCommentInput,
   CreateSquadInput,
@@ -13,6 +14,7 @@ import type {
   ResolveGateInput,
   UpdateTaskInput,
   UpdateAutopilotInput,
+  UpdateProjectAgentInput,
   UpdateSquadInput,
 } from "@shared/kanban";
 
@@ -87,6 +89,9 @@ export interface KanbanController {
   moveTask(taskId: string, stage: ManualTaskStage): Promise<BoardBootstrap>;
   deleteTask(taskId: string): Promise<BoardBootstrap>;
   addComment(input: CreateTaskCommentInput): Promise<BoardBootstrap>;
+  createAgent(input: CreateProjectAgentInput): Promise<BoardBootstrap>;
+  updateAgent(input: UpdateProjectAgentInput): Promise<BoardBootstrap>;
+  deleteAgent(agentId: string): Promise<BoardBootstrap>;
   createSquad(input: CreateSquadInput): Promise<BoardBootstrap>;
   updateSquad(input: UpdateSquadInput): Promise<BoardBootstrap>;
   deleteSquad(squadId: string): Promise<BoardBootstrap>;
@@ -153,6 +158,9 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
   const moveTask = useCallback((taskId: string, stage: ManualTaskStage) => perform(taskId, () => api.boardMoveTask(taskId, stage)), [api, perform]);
   const deleteTask = useCallback((taskId: string) => perform(taskId, () => api.boardDeleteTask(taskId)), [api, perform]);
   const addComment = useCallback((input: CreateTaskCommentInput) => perform(input.taskId, () => api.boardAddComment(input)), [api, perform]);
+  const createAgent = useCallback((input: CreateProjectAgentInput) => perform("agent:create", () => api.boardCreateAgent(input)), [api, perform]);
+  const updateAgent = useCallback((input: UpdateProjectAgentInput) => perform(`agent:${input.agentId}`, () => api.boardUpdateAgent(input)), [api, perform]);
+  const deleteAgent = useCallback((agentId: string) => perform(`agent:${agentId}`, () => api.boardDeleteAgent(agentId)), [api, perform]);
   const createSquad = useCallback((input: CreateSquadInput) => perform("squad:create", () => api.boardCreateSquad(input)), [api, perform]);
   const updateSquad = useCallback((input: UpdateSquadInput) => perform(`squad:${input.squadId}`, () => api.boardUpdateSquad(input)), [api, perform]);
   const deleteSquad = useCallback((squadId: string) => perform(`squad:${squadId}`, () => api.boardDeleteSquad(squadId)), [api, perform]);
@@ -172,6 +180,9 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
     moveTask,
     deleteTask,
     addComment,
+    createAgent,
+    updateAgent,
+    deleteAgent,
     createSquad,
     updateSquad,
     deleteSquad,
@@ -183,5 +194,5 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
     resolveGate,
     reviewExecution,
     abortTask,
-  }), [abortTask, addComment, createAutopilot, createSquad, createTask, deleteAutopilot, deleteSquad, deleteTask, dispatchTask, moveTask, resolveGate, reviewExecution, state, triggerAutopilot, updateAutopilot, updateSquad, updateTask]);
+  }), [abortTask, addComment, createAgent, createAutopilot, createSquad, createTask, deleteAgent, deleteAutopilot, deleteSquad, deleteTask, dispatchTask, moveTask, resolveGate, reviewExecution, state, triggerAutopilot, updateAgent, updateAutopilot, updateSquad, updateTask]);
 }

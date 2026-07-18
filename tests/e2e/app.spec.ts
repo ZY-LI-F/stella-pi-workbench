@@ -41,11 +41,30 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     const taskRoom = window.getByLabel("任务详情：验证固定 Agent 看板");
     await expect(taskRoom.getByText("任务事实流", { exact: true })).toBeVisible();
     await expect(taskRoom.getByText("尚无持久化 Run", { exact: true })).toBeVisible();
-    const roomComposer = taskRoom.getByPlaceholder("补充上下文；用 @builder 或 @BUILD 可直接委派…");
+    const roomComposer = taskRoom.getByPlaceholder("补充上下文；用 @lead 调度团队，或 @builder 直接委派…");
     await roomComposer.fill("@builder 实现后交给 @VERIFY 验证");
     await expect(taskRoom.getByText(/提交后将创建 2 个 AgentTask/)).toBeVisible();
     await window.screenshot({ path: "docs/task-room-stella.png", fullPage: true, animations: "disabled" });
     await taskRoom.getByRole("button", { name: "关闭任务详情" }).click();
+
+    await window.getByRole("button", { name: "团队协作", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "团队协作" })).toBeVisible();
+    await expect(window.getByRole("button", { name: /验证固定 Agent 看板/ })).toBeVisible();
+    const teamRoom = window.getByLabel("任务详情：验证固定 Agent 看板");
+    const teamComposer = teamRoom.getByPlaceholder("补充上下文；用 @lead 调度团队，或 @builder 直接委派…");
+    await teamComposer.fill("@lead 请拆解任务、委派合适 Worker 并验收结果");
+    await expect(teamRoom.getByText(/通用调度负责人 \(@lead\)/)).toBeVisible();
+    await window.getByRole("button", { name: "创建 Agent", exact: true }).click();
+    const agentDraft = window.getByRole("dialog", { name: "创建项目 Agent" });
+    await agentDraft.getByLabel(/名称/).fill("数据分析师");
+    await agentDraft.getByLabel(/呼号/).fill("DATA");
+    await agentDraft.getByLabel(/职责/).fill("分析项目数据并提供可复算证据。");
+    await agentDraft.getByLabel(/固定指令/).fill("只读分析；明确输入、计算过程、结论和未验证项。");
+    await agentDraft.getByRole("button", { name: "创建 Agent", exact: true }).click();
+    await expect(window.locator(".agent-presence", { hasText: "数据分析师" })).toBeVisible();
+    await window.screenshot({ path: "docs/team-chat-stella.png", fullPage: true, animations: "disabled" });
+    await window.getByRole("button", { name: "任务看板", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
 
     await taskCard.dragTo(window.locator(".kanban-lane--blocked"));
     await expect(window.locator(".kanban-lane--blocked").getByText("验证固定 Agent 看板", { exact: true })).toBeVisible();

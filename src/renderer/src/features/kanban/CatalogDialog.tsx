@@ -27,6 +27,11 @@ export function CatalogDialog({ catalog, onClose }: { readonly catalog: Orchestr
                 <span>{agent.thinking} thinking</span>
               </div>
               <div className="tool-chips">{agent.allowedTools.map((tool) => <code key={tool}>{tool}</code>)}</div>
+              {(agent.requiredSkills?.length ?? 0) > 0 && (
+                <div className="tool-chips" aria-label={`${agent.name} 必需 Skills`}>
+                  {agent.requiredSkills?.map((skill) => <code key={skill}>skill:{skill}</code>)}
+                </div>
+              )}
             </article>
           ))}
         </div>}

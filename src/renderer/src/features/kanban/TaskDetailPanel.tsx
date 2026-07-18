@@ -61,10 +61,12 @@ interface TaskDetailPanelProps {
   readonly onReviewExecution: (input: ReviewExecutionInput) => Promise<void>;
   readonly onRevealPath: (path: string) => void;
   readonly onContinueInPi: (sessionPath: string) => Promise<void>;
+  readonly variant?: "drawer" | "workspace";
 }
 
 interface MentionPreview {
   readonly agents: readonly { readonly id: string; readonly name: string }[];
+  readonly resumesLead?: boolean;
   readonly error?: string;
 }
 
@@ -114,6 +116,7 @@ export function TaskDetailPanel({
   onReviewExecution,
   onRevealPath,
   onContinueInPi,
+  variant = "drawer",
 }: TaskDetailPanelProps) {
   const [gateComment, setGateComment] = useState("");
   const [commentBody, setCommentBody] = useState("");
@@ -143,6 +146,7 @@ export function TaskDetailPanel({
       : squads.find((squad) => squad.id === executionTarget.squadId)?.name ?? executionTarget.squadId;
   const isRedispatch = task.stage === "blocked";
   const activeAgentTask = agentTasks.find((candidate) => candidate.id === task.activeAgentTaskId);
+  const waitingCoordinator = activeAgentTask?.kind === "coordinator" && activeAgentTask.status === "waiting_human";
   const rootAgentTask = [...agentTasks].reverse().find((candidate) => !candidate.parentAgentTaskId);
   const executionTruth = [
     ...(run ? [{ kind: "workflow" as const, execution: run }] : []),
@@ -157,6 +161,7 @@ export function TaskDetailPanel({
     try {
       const availableAgents = availableMentionAgentsForTask(task, catalog, squads);
       const agents = parseAgentMentions(commentBody, availableAgents).agents.map((agent) => Object.freeze({ id: agent.id, name: agent.name }));
+      if (agents.length === 0 && waitingCoordinator) return Object.freeze({ agents: Object.freeze([]), resumesLead: true });
       if (agents.length > 0 && (task.activeRunId || task.activeAgentTaskId)) {
         return Object.freeze({ agents: Object.freeze(agents), error: "任务正在执行；请先中止或等待完成后再使用 @mention 分发" });
       }
@@ -167,7 +172,7 @@ export function TaskDetailPanel({
     } catch (cause) {
       return Object.freeze({ agents: Object.freeze([]), error: cause instanceof Error ? cause.message : String(cause) });
     }
-  }, [catalog, commentBody, squads, task]);
+  }, [catalog, commentBody, squads, task, waitingCoordinator]);
 
   const perform = async (action: () => Promise<void>) => {
     setError("");
@@ -184,10 +189,10 @@ export function TaskDetailPanel({
     && entry.provenance.source === (reviewTarget?.kind === "workflow" ? "workflow-run" : "agent-task");
 
   return (
-    <aside className="task-detail" aria-label={`任务详情：${task.title}`}>
+    <aside className={`task-detail task-detail--${variant}`} aria-label={`任务详情：${task.title}`}>
       <header className="task-detail__header">
         <div><small>TASK ROOM</small><h2>{task.title}</h2></div>
-        <button type="button" className="icon-button" aria-label="关闭任务详情" onClick={onClose}><X size={17} /></button>
+        {variant === "drawer" && <button type="button" className="icon-button" aria-label="关闭任务详情" onClick={onClose}><X size={17} /></button>}
       </header>
 
       <div className="task-detail__scroll">
@@ -286,12 +291,14 @@ export function TaskDetailPanel({
             });
           }}>
             <label htmlFor={`task-room-message-${task.id}`}>发送到 Task Room</label>
-            <textarea id={`task-room-message-${task.id}`} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} rows={3} placeholder="补充上下文；用 @builder 或 @BUILD 可直接委派…" />
+            <textarea id={`task-room-message-${task.id}`} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} rows={3} placeholder={waitingCoordinator ? "回复 LEAD 的问题；提交后自动进入下一决策回合…" : "补充上下文；用 @lead 调度团队，或 @builder 直接委派…"} />
             {commentBody.trim() && (
               <div className={`mention-impact ${mentionPreview.error ? "is-error" : mentionPreview.agents.length > 0 ? "is-dispatch" : "is-comment"}`} role={mentionPreview.error ? "alert" : "status"}>
                 {mentionPreview.error
                   ? <><XCircle size={13} /><span>{mentionPreview.error}</span></>
-                  : mentionPreview.agents.length > 0
+                  : mentionPreview.resumesLead
+                    ? <><GitBranch size={13} /><span>提交后将唤醒 @lead，创建新的 Coordinator 验收回合。</span></>
+                    : mentionPreview.agents.length > 0
                     ? <><GitBranch size={13} /><span>提交后将创建 {mentionPreview.agents.length} 个 AgentTask：{mentionPreview.agents.map((agent) => `${agent.name} (@${agent.id})`).join(" → ")}</span></>
                     : <><MessageCircle size={13} /><span>提交后仅追加用户消息，不创建 AgentTask。</span></>}
               </div>

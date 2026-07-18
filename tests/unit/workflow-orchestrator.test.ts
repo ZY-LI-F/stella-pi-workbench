@@ -95,7 +95,7 @@ describe("WorkflowOrchestrator", () => {
 
     runtimeFactory.runtimes[1]?.settle();
     await vi.waitFor(() => expect(repository.state.runs[0]?.status).toBe("review"));
-    expect(repository.state.tasks[0]?.stage).toBe("planned");
+    expect(repository.state.tasks[0]?.stage).toBe("review");
     expect(repository.state.runs[0]?.currentStepId).toBe("approve-plan");
 
     await orchestrator.resolveGate({ taskId, decision: "approve", comment: "方案通过" });
@@ -110,7 +110,7 @@ describe("WorkflowOrchestrator", () => {
     await orchestrator.dispatch(taskId);
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(1));
     await orchestrator.abort(taskId);
-    expect(repository.state.tasks[0]?.stage).toBe("planned");
+    expect(repository.state.tasks[0]?.stage).toBe("blocked");
     expect(repository.state.tasks[0]?.activeRunId).toBeUndefined();
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(repository.state.activities.at(-1)?.summary).toContain("中止");
@@ -128,7 +128,7 @@ describe("WorkflowOrchestrator", () => {
     await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.stop).toHaveBeenCalledTimes(2));
     expect(runtimeFactory.runtimes[0]?.running).toBe(false);
     expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(false);
-    expect(repository.state.tasks[0]?.stage).toBe("planned");
+    expect(repository.state.tasks[0]?.stage).toBe("blocked");
   });
 
   it("keeps abort terminal when a late Agent settlement arrives", async () => {
@@ -139,7 +139,7 @@ describe("WorkflowOrchestrator", () => {
     await orchestrator.abort(taskId);
     runtime?.settle();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(repository.state.tasks[0]?.stage).toBe("planned");
+    expect(repository.state.tasks[0]?.stage).toBe("blocked");
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(repository.state.runs[0]?.steps[0]?.artifact).toBeUndefined();
   });
@@ -149,7 +149,7 @@ describe("WorkflowOrchestrator", () => {
     await orchestrator.dispatch(taskId);
     await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(true));
     await orchestrator.shutdown();
-    expect(repository.state.tasks[0]?.stage).toBe("planned");
+    expect(repository.state.tasks[0]?.stage).toBe("blocked");
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(runtimeFactory.runtimes[0]?.stop).toHaveBeenCalled();
   });

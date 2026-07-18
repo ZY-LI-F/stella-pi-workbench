@@ -66,7 +66,8 @@ describe("BoardStore", () => {
     await writeFile(path, JSON.stringify(state), "utf8");
     let id = 0;
     const recovered = await new BoardStore(path, { now: () => now, id: () => `recovery-${++id}` }).initialize();
-    expect(recovered.tasks[0]?.stage).toBe("queued");
+    expect(recovered.tasks[0]?.stage).toBe("blocked");
+    expect(recovered.tasks[0]?.blockedReason).toContain("应用重启");
     expect(recovered.tasks[0]?.activeRunId).toBeUndefined();
     expect(recovered.runs[0]?.status).toBe("interrupted");
     expect(recovered.activities[0]?.summary).toContain("应用重启");
@@ -88,14 +89,14 @@ describe("BoardStore", () => {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, JSON.stringify(legacy), "utf8");
     const migrated = await new BoardStore(path, { now: () => now, id: () => "backup-id" }).initialize();
-    expect(migrated.version).toBe(3);
+    expect(migrated.version).toBe(BOARD_SCHEMA_VERSION);
     expect(migrated.tasks[0]?.executionTarget).toEqual({ kind: "workflow", workflowId: "flow" });
     expect(migrated.comments).toEqual([]);
     const files = await readdir(dirname(path));
     expect(files.some((file) => file.includes(".v1.2026-07-17T01-00-00.000Z.backup-id.bak"))).toBe(true);
   });
 
-  it("migrates the current schema v2 to v3 without losing automation history", async () => {
+  it("migrates schema v2 to the current version without losing automation history", async () => {
     const path = await temporaryBoardPath();
     const now = "2026-07-17T01:00:00.000Z";
     const legacyV2 = {
@@ -137,7 +138,8 @@ describe("BoardStore", () => {
 
     const migrated = await new BoardStore(path, { now: () => now, id: () => "backup-id" }).initialize();
 
-    expect(migrated.version).toBe(3);
+    expect(migrated.version).toBe(BOARD_SCHEMA_VERSION);
+    expect(migrated.customAgents).toEqual([]);
     expect(migrated.tasks[0]).toMatchObject({ id: "task-v2", stage: "completed" });
     expect(migrated.runs[0]).toMatchObject({ id: "run-v2", status: "reported", acceptance: "pending" });
     expect(migrated.agentTasks[0]).toMatchObject({ id: "agent-task-v2", status: "reported", acceptance: "pending", output: "历史结果" });
@@ -147,6 +149,20 @@ describe("BoardStore", () => {
     expect(migrated.autopilots[0]?.name).toBe("历史规则");
     expect(migrated.autopilotRuns[0]?.id).toBe("autopilot-run-v2");
     expect((await readdir(dirname(path))).some((file) => file.includes(".v2.2026-07-17T01-00-00.000Z.backup-id.bak"))).toBe(true);
+  });
+
+  it("migrates an installed schema v3 board and adds the project Agent collection", async () => {
+    const path = await temporaryBoardPath();
+    const now = "2026-07-17T01:00:00.000Z";
+    const { customAgents: _customAgents, version: _version, ...v3Collections } = EMPTY_BOARD_STATE;
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify({ ...v3Collections, version: 3 }), "utf8");
+
+    const migrated = await new BoardStore(path, { now: () => now, id: () => "backup-id" }).initialize();
+
+    expect(migrated.version).toBe(BOARD_SCHEMA_VERSION);
+    expect(migrated.customAgents).toEqual([]);
+    expect((await readdir(dirname(path))).some((file) => file.includes(".v3.2026-07-17T01-00-00.000Z.backup-id.bak"))).toBe(true);
   });
 
   it("preserves queued agent work and interrupts only a running AgentTask on restart", async () => {

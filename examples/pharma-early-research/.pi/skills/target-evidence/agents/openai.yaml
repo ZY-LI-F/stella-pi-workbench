@@ -1,0 +1,3 @@
+interface:
+  display_name: "Target Evidence"
+  short_description: "Build an auditable target biology evidence pack"

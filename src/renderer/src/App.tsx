@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Settings2,
   TerminalSquare,
+  UsersRound,
 } from "lucide-react";
 import type {
   ModelSummary,
@@ -44,6 +45,7 @@ import { Topbar } from "./components/Topbar";
 import { WindowControls } from "./components/WindowControls";
 import { KanbanWorkspace } from "./features/kanban/KanbanWorkspace";
 import { createPiTaskDraft, type PiTaskDraft } from "./features/kanban/pi-task-draft";
+import { TeamWorkspace } from "./features/team/TeamWorkspace";
 
 interface AppProps {
   readonly api: StellaDesktopApi;
@@ -280,6 +282,7 @@ export function App({ api }: AppProps) {
   const paletteActions = useMemo<readonly PaletteAction[]>(
     () => {
       const actions: PaletteAction[] = [
+        { id: "team", label: "打开团队协作", detail: "在 Task Room 中 @lead 或直接委派 Worker", icon: UsersRound, run: () => setWorkspaceView("team") },
         { id: "kanban", label: "打开任务看板", detail: "监督固定 Agent 团队与流程", icon: LayoutDashboard, run: () => setWorkspaceView("kanban") },
         { id: "project", label: "打开项目", detail: "选择新的本地工作目录", icon: FolderOpen, run: () => void chooseProject() },
       ];
@@ -309,12 +312,13 @@ export function App({ api }: AppProps) {
       }
       if (ctrl && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
-        if (workspaceView === "kanban") newTask();
+        if (workspaceView === "kanban" || workspaceView === "team") newTask();
         else void newSession();
       }
       if (ctrl && event.key.toLocaleLowerCase() === "l") {
         event.preventDefault();
         if (workspaceView === "kanban") document.querySelector<HTMLInputElement>(".kanban-search input")?.focus();
+        else if (workspaceView === "team") document.querySelector<HTMLInputElement>(".team-channel-search input")?.focus();
         else focusComposer();
       }
       if (ctrl && event.key === "`") {
@@ -323,7 +327,7 @@ export function App({ api }: AppProps) {
       }
       if (ctrl && event.key.toLocaleLowerCase() === "i") {
         event.preventDefault();
-        if (workspaceView === "kanban") {
+        if (workspaceView !== "chat") {
           setWorkspaceView("chat");
           setInspectorOpen(true);
         } else {
@@ -430,6 +434,17 @@ export function App({ api }: AppProps) {
             </>}
           </section>
         </main>
+      ) : workspaceView === "team" ? (
+        <TeamWorkspace
+          api={api}
+          controller={kanban}
+          project={bootstrap?.project}
+          executionEnabled={piReady}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          onNewTask={newTask}
+          onContinueTaskSession={(taskId, sessionPath) => continueTaskSession(taskId, sessionPath)}
+          onError={(message) => controller.notify(message, "error")}
+        />
       ) : (
         <KanbanWorkspace
           api={api}

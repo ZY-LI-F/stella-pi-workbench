@@ -11,6 +11,7 @@ import {
   Search,
   Settings2,
   TerminalSquare,
+  UsersRound,
 } from "lucide-react";
 import type { CapabilityHealthSnapshot, CapabilityName } from "@shared/capabilities";
 import type { RecentProject, RuntimeBootstrap, SessionSummary } from "@shared/contracts";
@@ -36,7 +37,7 @@ interface SidebarProps {
   readonly onOpenSettings: () => void;
 }
 
-export type WorkspaceView = "chat" | "kanban";
+export type WorkspaceView = "chat" | "team" | "kanban";
 
 const CAPABILITY_LABEL: Readonly<Record<CapabilityName, string>> = Object.freeze({
   pi: "Pi",
@@ -125,7 +126,8 @@ export function Sidebar({
   }, [bootstrap?.sessions, query]);
   const taskReady = capabilities?.task.state === "ready";
   const piReady = capabilities?.pi.state === "ready" && Boolean(bootstrap);
-  const primaryActionDisabled = activeView === "kanban" ? !taskReady || !bootstrap : !piReady;
+  const taskSurface = activeView === "kanban" || activeView === "team";
+  const primaryActionDisabled = taskSurface ? !taskReady || !bootstrap : !piReady;
 
   return (
     <>
@@ -137,13 +139,17 @@ export function Sidebar({
           </button>
         </div>
 
-        <button type="button" className="new-session-button" disabled={primaryActionDisabled} onClick={activeView === "kanban" ? onNewTask : onNewSession}>
+        <button type="button" className="new-session-button" disabled={primaryActionDisabled} onClick={taskSurface ? onNewTask : onNewSession}>
           <CirclePlus size={18} />
-          <span>{activeView === "kanban" ? "新建看板任务" : "新建会话"}</span>
+          <span>{activeView === "team" ? "新建团队任务" : activeView === "kanban" ? "新建看板任务" : "新建会话"}</span>
           <kbd>Ctrl N</kbd>
         </button>
 
         <nav className="quick-nav" aria-label="工作区工具">
+          <button type="button" className={activeView === "team" ? "is-active" : ""} onClick={() => onSwitchView("team")}>
+            <UsersRound size={16} />
+            <span>团队协作</span>
+          </button>
           <button type="button" className={activeView === "kanban" ? "is-active" : ""} onClick={() => onSwitchView("kanban")}>
             <LayoutDashboard size={16} />
             <span>任务看板</span>

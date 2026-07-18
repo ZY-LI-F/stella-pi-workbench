@@ -5,9 +5,11 @@ import type {
   BoardState,
   CreateSquadInput,
   OrchestrationCatalog,
+  ProjectAgentDefinition,
   Squad,
   UpdateSquadInput,
 } from "../shared/kanban";
+import { catalogForBoard } from "../shared/orchestration-catalog";
 
 interface SquadServiceDependencies {
   readonly repository: BoardRepository;
@@ -41,7 +43,7 @@ export class SquadService {
   async create(input: CreateSquadInput): Promise<BoardBootstrap> {
     const now = this.#now();
     return this.#commit((current) => {
-      const normalized = this.#validatedInput(input);
+      const normalized = this.#validatedInput(current, input);
       if (current.squads.some((squad) => squad.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
         throw new Error(`Squad 名称已存在: ${normalized.name}`);
       }
@@ -54,7 +56,7 @@ export class SquadService {
     const now = this.#now();
     return this.#commit((current) => {
       const existing = this.#squad(current, input.squadId);
-      const normalized = this.#validatedInput(input);
+      const normalized = this.#validatedInput(current, input);
       if (current.squads.some((squad) => squad.id !== existing.id && squad.name.toLocaleLowerCase() === normalized.name.toLocaleLowerCase())) {
         throw new Error(`Squad 名称已存在: ${normalized.name}`);
       }
@@ -79,14 +81,22 @@ export class SquadService {
     });
   }
 
-  #validatedInput(input: CreateSquadInput): Omit<Squad, "id" | "createdAt" | "updatedAt"> {
+  #validatedInput(state: BoardState, input: CreateSquadInput): Omit<Squad, "id" | "createdAt" | "updatedAt"> {
     const leaderAgentId = required(input.leaderAgentId, "Leader Agent");
-    this.#agent(leaderAgentId);
+    if (leaderAgentId === "lead") throw new Error("通用 LEAD 使用 Coordinator 协议；请在 Task Room 中 @lead，不要把它配置为旧式 Squad Leader");
+    this.#agent(state, leaderAgentId);
     const memberAgentIds = Object.freeze(input.memberAgentIds.map((agentId) => required(agentId, "成员 Agent")));
     if (memberAgentIds.length === 0) throw new Error("Squad 至少需要一位成员");
     if (new Set(memberAgentIds).size !== memberAgentIds.length) throw new Error("Squad 成员不能重复");
     if (memberAgentIds.includes(leaderAgentId)) throw new Error("Leader 不能重复出现在 Squad 成员中");
-    memberAgentIds.forEach((agentId) => this.#agent(agentId));
+    if (memberAgentIds.includes("lead")) throw new Error("通用 LEAD 不能作为旧式 Squad 成员");
+    memberAgentIds.forEach((agentId) => this.#agent(state, agentId));
+    const catalog = catalogForBoard(this.#catalog, state);
+    const projectPaths = new Set([leaderAgentId, ...memberAgentIds]
+      .map((agentId) => catalog.agents.find((agent) => agent.id === agentId) as Partial<ProjectAgentDefinition> | undefined)
+      .map((agent) => agent?.projectPath)
+      .filter((path): path is string => Boolean(path)));
+    if (projectPaths.size > 1) throw new Error("Squad 不能混用不同项目的自定义 Agent");
     return Object.freeze({
       name: required(input.name, "Squad 名称"),
       description: input.description.trim(),
@@ -96,8 +106,8 @@ export class SquadService {
     });
   }
 
-  #agent(agentId: string): void {
-    if (!this.#catalog.agents.some((agent) => agent.id === agentId)) throw new Error(`未知 Agent: ${agentId}`);
+  #agent(state: BoardState, agentId: string): void {
+    if (!catalogForBoard(this.#catalog, state).agents.some((agent) => agent.id === agentId)) throw new Error(`未知 Agent: ${agentId}`);
   }
 
   #squad(state: BoardState, squadId: string): Squad {
@@ -108,7 +118,7 @@ export class SquadService {
 
   async #commit(transform: (current: BoardState) => BoardState): Promise<BoardBootstrap> {
     const board = await this.#repository.update(transform);
-    const bootstrap = Object.freeze({ board, catalog: this.#catalog });
+    const bootstrap = Object.freeze({ board, catalog: catalogForBoard(this.#catalog, board) });
     this.#emitChanged(bootstrap);
     return bootstrap;
   }

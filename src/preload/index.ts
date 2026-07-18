@@ -11,6 +11,7 @@ import type { CapabilityHealthSnapshot, CapabilityName } from "../shared/capabil
 import type {
   BoardBootstrap,
   CreateAutopilotInput,
+  CreateProjectAgentInput,
   CreateTaskCommentInput,
   CreateSquadInput,
   CreateTaskInput,
@@ -20,6 +21,7 @@ import type {
   ResolveGateInput,
   UpdateTaskInput,
   UpdateAutopilotInput,
+  UpdateProjectAgentInput,
   UpdateSquadInput,
 } from "../shared/kanban";
 
@@ -48,6 +50,12 @@ const api: StellaDesktopApi = Object.freeze({
     ipcRenderer.invoke("stella:board:delete-task", taskId) as Promise<BoardBootstrap>,
   boardAddComment: (input: CreateTaskCommentInput) =>
     ipcRenderer.invoke("stella:board:add-comment", input) as Promise<BoardBootstrap>,
+  boardCreateAgent: (input: CreateProjectAgentInput) =>
+    ipcRenderer.invoke("stella:board:create-agent", input) as Promise<BoardBootstrap>,
+  boardUpdateAgent: (input: UpdateProjectAgentInput) =>
+    ipcRenderer.invoke("stella:board:update-agent", input) as Promise<BoardBootstrap>,
+  boardDeleteAgent: (agentId: string) =>
+    ipcRenderer.invoke("stella:board:delete-agent", agentId) as Promise<BoardBootstrap>,
   boardCreateSquad: (input: CreateSquadInput) =>
     ipcRenderer.invoke("stella:board:create-squad", input) as Promise<BoardBootstrap>,
   boardUpdateSquad: (input: UpdateSquadInput) =>

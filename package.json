@@ -28,6 +28,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:pharma": "npm run build && playwright test tests/e2e/pharma-early-research.spec.ts",
+    "test:e2e:pharma:live": "npm run build && playwright test --config playwright.live.config.ts",
     "test:packaged": "playwright test tests/e2e/packaged.spec.ts",
     "release:checksums": "node scripts/write-release-checksums.mjs",
     "check": "npm run typecheck && npm test"

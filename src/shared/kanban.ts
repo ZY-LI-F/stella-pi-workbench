@@ -1,4 +1,5 @@
-export const BOARD_SCHEMA_VERSION = 3 as const;
+export const BOARD_SCHEMA_VERSION = 4 as const;
+export const BOARD_SCHEMA_V3 = 3 as const;
 export const BOARD_SCHEMA_V2 = 2 as const;
 export const LEGACY_BOARD_SCHEMA_VERSION = 1 as const;
 
@@ -26,6 +27,7 @@ export const AGENT_TASK_STATUSES = [
   "queued",
   "running",
   "waiting_children",
+  "waiting_human",
   "reported",
   "failed",
   "interrupted",
@@ -54,12 +56,20 @@ export interface AgentDefinition {
   readonly instructions: string;
   readonly workspaceAccess: WorkspaceAccess;
   readonly allowedTools: readonly string[];
+  /** Pi project/user skills that must be discoverable before this Agent receives a prompt. */
+  readonly requiredSkills?: readonly string[];
   readonly thinking: AgentThinkingLevel;
   readonly provider?: string;
   readonly model?: string;
   readonly disableExtensions: boolean;
   readonly disableSkills: boolean;
   readonly disablePromptTemplates: boolean;
+}
+
+export interface ProjectAgentDefinition extends AgentDefinition {
+  readonly projectPath: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface TeamRole {
@@ -210,7 +220,7 @@ export interface TaskMessage {
 
 export type TaskComment = TaskMessage;
 
-export type AgentTaskKind = "direct" | "mention-root" | "squad-leader" | "delegated";
+export type AgentTaskKind = "direct" | "mention-root" | "squad-leader" | "coordinator" | "coordinator-review" | "delegated";
 
 export interface AgentTask {
   readonly id: string;
@@ -296,6 +306,7 @@ export interface BoardState {
   readonly activities: readonly TaskActivity[];
   readonly comments: readonly TaskComment[];
   readonly agentTasks: readonly AgentTask[];
+  readonly customAgents: readonly ProjectAgentDefinition[];
   readonly squads: readonly Squad[];
   readonly autopilots: readonly Autopilot[];
   readonly autopilotRuns: readonly AutopilotRun[];
@@ -370,6 +381,27 @@ export interface CreateTaskCommentInput {
   readonly body: string;
 }
 
+export interface CreateProjectAgentInput {
+  readonly name: string;
+  readonly callsign: string;
+  readonly responsibility: string;
+  readonly instructions: string;
+  readonly workspaceAccess: WorkspaceAccess;
+  readonly allowedTools: readonly string[];
+  readonly requiredSkills?: readonly string[];
+  readonly thinking: AgentThinkingLevel;
+  readonly provider?: string;
+  readonly model?: string;
+  readonly disableExtensions: boolean;
+  readonly disableSkills: boolean;
+  readonly disablePromptTemplates: boolean;
+  readonly projectPath: string;
+}
+
+export interface UpdateProjectAgentInput extends CreateProjectAgentInput {
+  readonly agentId: string;
+}
+
 export interface CreateSquadInput {
   readonly name: string;
   readonly description: string;
@@ -431,6 +463,7 @@ export const EMPTY_BOARD_STATE: BoardState = Object.freeze({
   activities: Object.freeze([]),
   comments: Object.freeze([]),
   agentTasks: Object.freeze([]),
+  customAgents: Object.freeze([]),
   squads: Object.freeze([]),
   autopilots: Object.freeze([]),
   autopilotRuns: Object.freeze([]),
@@ -549,12 +582,21 @@ function assertAgent(value: unknown, path: string): asserts value is AgentDefini
   assertString(value.instructions, `${path}.instructions`);
   assertOneOf(value.workspaceAccess, ["read", "write"] as const, `${path}.workspaceAccess`);
   assertStringArray(value.allowedTools, `${path}.allowedTools`);
+  if (value.requiredSkills !== undefined) assertStringArray(value.requiredSkills, `${path}.requiredSkills`);
   assertOneOf(value.thinking, ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, `${path}.thinking`);
   assertOptionalString(value.provider, `${path}.provider`);
   assertOptionalString(value.model, `${path}.model`);
   for (const key of ["disableExtensions", "disableSkills", "disablePromptTemplates"] as const) {
     if (typeof value[key] !== "boolean") throw new Error(`${path}.${key} 必须是布尔值`);
   }
+}
+
+function assertProjectAgent(value: unknown, path: string): asserts value is ProjectAgentDefinition {
+  assertAgent(value, path);
+  if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
+  assertString(value.projectPath, `${path}.projectPath`);
+  assertIsoDate(value.createdAt, `${path}.createdAt`);
+  assertIsoDate(value.updatedAt, `${path}.updatedAt`);
 }
 
 function assertExecutionTarget(value: unknown, path: string): asserts value is ExecutionTarget {
@@ -690,7 +732,7 @@ function assertAgentTask(value: unknown, path: string): asserts value is AgentTa
   assertString(value.id, `${path}.id`);
   assertString(value.taskId, `${path}.taskId`);
   assertAgent(value.agentSnapshot, `${path}.agentSnapshot`);
-  assertOneOf(value.kind, ["direct", "mention-root", "squad-leader", "delegated"] as const, `${path}.kind`);
+  assertOneOf(value.kind, ["direct", "mention-root", "squad-leader", "coordinator", "coordinator-review", "delegated"] as const, `${path}.kind`);
   assertOneOf(value.status, AGENT_TASK_STATUSES, `${path}.status`);
   assertOneOf(value.acceptance, EXECUTION_ACCEPTANCE_STATUSES, `${path}.acceptance`);
   assertOptionalString(value.acceptanceComment, `${path}.acceptanceComment`);
@@ -710,10 +752,12 @@ function assertAgentTask(value: unknown, path: string): asserts value is AgentTa
   if (value.status === "running" && !value.runtimeToken) throw new Error(`${path}.runtimeToken 是 running 状态的必填字段`);
   if (value.status !== "running" && value.runtimeToken !== undefined) throw new Error(`${path}.runtimeToken 只允许 running 状态使用`);
   if (TERMINAL_AGENT_TASK_SET.has(value.status) && !value.completedAt) throw new Error(`${path}.completedAt 是终态的必填字段`);
-  if (value.status === "waiting_children" && value.kind !== "squad-leader" && value.kind !== "mention-root") {
-    throw new Error(`${path} 只有 Squad Leader 或 mention root 能等待子任务`);
+  if (value.status === "waiting_children" && value.kind !== "squad-leader" && value.kind !== "mention-root" && value.kind !== "coordinator") {
+    throw new Error(`${path} 只有 Squad Leader、mention root 或 Coordinator 能等待子任务`);
   }
+  if (value.status === "waiting_human" && value.kind !== "coordinator") throw new Error(`${path} 只有 Coordinator 能等待用户回复`);
   if (value.kind === "delegated" && !value.parentAgentTaskId) throw new Error(`${path}.parentAgentTaskId 是 delegated 任务的必填字段`);
+  if (value.kind === "coordinator-review" && !value.parentAgentTaskId) throw new Error(`${path}.parentAgentTaskId 是 coordinator-review 的必填字段`);
   if (value.kind === "squad-leader" && !value.squadId) throw new Error(`${path}.squadId 是 Squad Leader 的必填字段`);
   const isRoot = value.parentAgentTaskId === undefined;
   if (!isRoot && value.acceptance !== "not-ready") throw new Error(`${path}.acceptance 只允许根 AgentTask 使用`);
@@ -807,7 +851,11 @@ function assertUniqueIds(values: readonly { readonly id: string }[], label: stri
 }
 
 function cloneAgent(agent: AgentDefinition): AgentDefinition {
-  return Object.freeze({ ...agent, allowedTools: Object.freeze([...agent.allowedTools]) });
+  return Object.freeze({
+    ...agent,
+    allowedTools: Object.freeze([...agent.allowedTools]),
+    requiredSkills: agent.requiredSkills ? Object.freeze([...agent.requiredSkills]) : undefined,
+  });
 }
 
 function cloneWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
@@ -903,7 +951,7 @@ function validateReferences(state: BoardState): void {
     if (agentTask.squadId && !squadIds.has(agentTask.squadId)) throw new Error(`AgentTask ${agentTask.id} 引用了未知 Squad`);
     if (agentTask.parentAgentTaskId) {
       const parent = agentTasksById.get(agentTask.parentAgentTaskId);
-      if (!parent || parent.taskId !== agentTask.taskId || (parent.kind !== "squad-leader" && parent.kind !== "mention-root")) {
+      if (!parent || parent.taskId !== agentTask.taskId || (parent.kind !== "squad-leader" && parent.kind !== "mention-root" && parent.kind !== "coordinator")) {
         throw new Error(`AgentTask ${agentTask.id} 的 parentAgentTaskId 无效`);
       }
     }
@@ -929,7 +977,7 @@ function validateReferences(state: BoardState): void {
 export function parseBoardState(value: unknown): BoardState {
   if (!isRecord(value)) throw new Error("看板文件根节点必须是对象");
   if (value.version !== BOARD_SCHEMA_VERSION) throw new Error(`不支持的看板版本: ${String(value.version)}`);
-  const collections = ["tasks", "runs", "activities", "comments", "agentTasks", "squads", "autopilots", "autopilotRuns"] as const;
+  const collections = ["tasks", "runs", "activities", "comments", "agentTasks", "customAgents", "squads", "autopilots", "autopilotRuns"] as const;
   for (const collection of collections) {
     if (!Array.isArray(value[collection])) throw new Error(`看板文件缺少 ${collection} 数组`);
   }
@@ -939,6 +987,7 @@ export function parseBoardState(value: unknown): BoardState {
   const rawActivities = value.activities as unknown[];
   const rawComments = value.comments as unknown[];
   const rawAgentTasks = value.agentTasks as unknown[];
+  const rawCustomAgents = value.customAgents as unknown[];
   const rawSquads = value.squads as unknown[];
   const rawAutopilots = value.autopilots as unknown[];
   const rawAutopilotRuns = value.autopilotRuns as unknown[];
@@ -947,6 +996,7 @@ export function parseBoardState(value: unknown): BoardState {
   rawActivities.forEach((activity, index) => assertActivity(activity, `activities[${index}]`));
   rawComments.forEach((comment, index) => assertComment(comment, `comments[${index}]`));
   rawAgentTasks.forEach((agentTask, index) => assertAgentTask(agentTask, `agentTasks[${index}]`));
+  rawCustomAgents.forEach((agent, index) => assertProjectAgent(agent, `customAgents[${index}]`));
   rawSquads.forEach((squad, index) => assertSquad(squad, `squads[${index}]`));
   rawAutopilots.forEach((autopilot, index) => assertAutopilot(autopilot, `autopilots[${index}]`));
   rawAutopilotRuns.forEach((run, index) => assertAutopilotRun(run, `autopilotRuns[${index}]`));
@@ -956,6 +1006,7 @@ export function parseBoardState(value: unknown): BoardState {
   const activities = rawActivities as unknown as readonly TaskActivity[];
   const comments = rawComments as unknown as readonly TaskComment[];
   const agentTasks = rawAgentTasks as unknown as readonly AgentTask[];
+  const customAgents = rawCustomAgents as unknown as readonly ProjectAgentDefinition[];
   const squads = rawSquads as unknown as readonly Squad[];
   const autopilots = rawAutopilots as unknown as readonly Autopilot[];
   const autopilotRuns = rawAutopilotRuns as unknown as readonly AutopilotRun[];
@@ -965,6 +1016,7 @@ export function parseBoardState(value: unknown): BoardState {
   assertUniqueIds(activities, "活动");
   assertUniqueIds(comments, "评论");
   assertUniqueIds(agentTasks, " AgentTask");
+  assertUniqueIds(customAgents, "自定义 Agent");
   assertUniqueIds(squads, " Squad");
   assertUniqueIds(autopilots, " Autopilot");
   assertUniqueIds(autopilotRuns, " AutopilotRun");
@@ -976,6 +1028,7 @@ export function parseBoardState(value: unknown): BoardState {
     activities: Object.freeze(activities.map((activity) => Object.freeze({ ...activity }))),
     comments: Object.freeze(comments.map((comment) => Object.freeze({ ...comment }))),
     agentTasks: Object.freeze(agentTasks.map((agentTask) => Object.freeze({ ...agentTask, agentSnapshot: cloneAgent(agentTask.agentSnapshot) }))),
+    customAgents: Object.freeze(customAgents.map((agent) => Object.freeze({ ...cloneAgent(agent), projectPath: agent.projectPath, createdAt: agent.createdAt, updatedAt: agent.updatedAt }))),
     squads: Object.freeze(squads.map((squad) => Object.freeze({ ...squad, memberAgentIds: Object.freeze([...squad.memberAgentIds]) }))),
     autopilots: Object.freeze(autopilots.map((autopilot) => Object.freeze({
       ...autopilot,
@@ -1044,6 +1097,7 @@ export function migrateBoardStateV2(value: unknown): BoardState {
     activities: value.activities,
     comments: value.comments,
     agentTasks: (value.agentTasks as unknown[]).map((task, index) => migrateV2AgentTask(task, `agentTasks[${index}]`)),
+    customAgents: [],
     squads: value.squads,
     autopilots: value.autopilots,
     autopilotRuns: value.autopilotRuns,
@@ -1086,20 +1140,34 @@ export function migrateBoardStateV1(value: unknown): BoardState {
     activities: value.activities,
     comments: [],
     agentTasks: [],
+    customAgents: [],
     squads: [],
     autopilots: [],
     autopilotRuns: [],
   });
 }
 
+export function migrateBoardStateV3(value: unknown): BoardState {
+  if (!isRecord(value)) throw new Error("schema v3 看板文件根节点必须是对象");
+  if (value.version !== BOARD_SCHEMA_V3) throw new Error(`无法从版本 ${String(value.version)} 迁移看板`);
+  const collections = ["tasks", "runs", "activities", "comments", "agentTasks", "squads", "autopilots", "autopilotRuns"] as const;
+  for (const collection of collections) {
+    if (!Array.isArray(value[collection])) throw new Error(`schema v3 看板文件缺少 ${collection} 数组`);
+  }
+  return parseBoardState({ ...value, version: BOARD_SCHEMA_VERSION, customAgents: [] });
+}
+
 export interface ParsedBoardFile {
   readonly state: BoardState;
-  readonly migratedFrom?: typeof LEGACY_BOARD_SCHEMA_VERSION | typeof BOARD_SCHEMA_V2;
+  readonly migratedFrom?: typeof LEGACY_BOARD_SCHEMA_VERSION | typeof BOARD_SCHEMA_V2 | typeof BOARD_SCHEMA_V3;
 }
 
 export function parseBoardFile(value: unknown): ParsedBoardFile {
   if (!isRecord(value)) throw new Error("看板文件根节点必须是对象");
   if (value.version === BOARD_SCHEMA_VERSION) return Object.freeze({ state: parseBoardState(value) });
+  if (value.version === BOARD_SCHEMA_V3) {
+    return Object.freeze({ state: migrateBoardStateV3(value), migratedFrom: BOARD_SCHEMA_V3 });
+  }
   if (value.version === BOARD_SCHEMA_V2) {
     return Object.freeze({ state: migrateBoardStateV2(value), migratedFrom: BOARD_SCHEMA_V2 });
   }

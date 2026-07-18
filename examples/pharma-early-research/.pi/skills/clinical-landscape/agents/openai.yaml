@@ -1,0 +1,3 @@
+interface:
+  display_name: "Clinical Landscape"
+  short_description: "Audit target-level clinical competitors and trial status"

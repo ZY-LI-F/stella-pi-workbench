@@ -85,7 +85,7 @@ export function TaskCard({ task, workflow, executionLabel, run, agentTask, activ
       {agentTask && (
         <div className={`agent-task-rail agent-task-rail--${agentTask.status}`}>
           <span><i /><b /></span>
-          <div><small>{agentTask.kind === "direct" ? "DIRECT AGENT" : agentTask.kind === "mention-root" ? "MENTION GROUP" : agentTask.kind === "squad-leader" ? "SQUAD LEADER" : "DELEGATED"}</small><strong>{agentTask.agentSnapshot.name}</strong></div>
+          <div><small>{agentTask.kind === "direct" ? "DIRECT AGENT" : agentTask.kind === "mention-root" ? "MENTION GROUP" : agentTask.kind === "squad-leader" ? "SQUAD LEADER" : agentTask.kind === "coordinator" ? "LEAD COORDINATOR" : agentTask.kind === "coordinator-review" ? "LEAD REVIEW" : "DELEGATED"}</small><strong>{agentTask.agentSnapshot.name}</strong></div>
           <em>{liveAgentTaskEvent?.eventType ?? agentTask.status}</em>
         </div>
       )}

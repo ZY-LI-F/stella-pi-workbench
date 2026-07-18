@@ -1,4 +1,4 @@
-import type { AgentDefinition, KanbanTask, OrchestrationCatalog, Squad } from "./kanban";
+import type { AgentDefinition, KanbanTask, OrchestrationCatalog, ProjectAgentDefinition, Squad } from "./kanban";
 
 const MENTION_PATTERN = /(?:^|\s)@([A-Za-z0-9_-]+)/gu;
 
@@ -8,12 +8,16 @@ export interface ParsedAgentMentions {
 }
 
 export function availableMentionAgentsForTask(
-  task: Pick<KanbanTask, "executionTarget">,
+  task: Pick<KanbanTask, "executionTarget" | "projectPath">,
   catalog: Pick<OrchestrationCatalog, "agents">,
   squads: readonly Squad[],
 ): readonly AgentDefinition[] {
+  const inProject = (agent: AgentDefinition): boolean => {
+    const scoped = agent as Partial<ProjectAgentDefinition>;
+    return scoped.projectPath === undefined || scoped.projectPath === task.projectPath;
+  };
   const executionTarget = task.executionTarget;
-  if (executionTarget.kind !== "squad") return catalog.agents;
+  if (executionTarget.kind !== "squad") return Object.freeze(catalog.agents.filter(inProject));
   const squad = squads.find((candidate) => candidate.id === executionTarget.squadId);
   if (!squad) throw new Error(`找不到 Squad: ${executionTarget.squadId}`);
   const agent = (agentId: string): AgentDefinition => {
@@ -21,7 +25,10 @@ export function availableMentionAgentsForTask(
     if (!definition) throw new Error(`未知 Agent: ${agentId}`);
     return definition;
   };
-  return Object.freeze([agent(squad.leaderAgentId), ...squad.memberAgentIds.map(agent)]);
+  const squadAgents = [agent(squad.leaderAgentId), ...squad.memberAgentIds.map(agent)];
+  if (squadAgents.some((definition) => !inProject(definition))) throw new Error(`Squad ${squad.id} 包含其他项目的自定义 Agent`);
+  const lead = catalog.agents.find((definition) => definition.id === "lead");
+  return Object.freeze([...(lead && inProject(lead) && !squadAgents.some((definition) => definition.id === lead.id) ? [lead] : []), ...squadAgents]);
 }
 
 export function parseAgentMentions(text: string, availableAgents: readonly AgentDefinition[]): ParsedAgentMentions {

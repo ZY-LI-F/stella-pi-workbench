@@ -83,22 +83,23 @@ export function AutomationStudioDialog({
   onTriggerAutopilot,
   onCopy,
 }: AutomationStudioDialogProps) {
+  const squadAgents = useMemo(() => catalog.agents.filter((agent) => agent.id !== "lead"), [catalog.agents]);
   const [activeTab, setActiveTab] = useState<"squads" | "autopilots">("squads");
   const [selectedId, setSelectedId] = useState<string | "new">(squads[0]?.id ?? "new");
   const selected = selectedId === "new" ? undefined : squads.find((squad) => squad.id === selectedId);
-  const [draft, setDraft] = useState<SquadDraft>(() => selected ? squadDraft(selected) : emptyDraft(catalog.agents));
+  const [draft, setDraft] = useState<SquadDraft>(() => selected ? squadDraft(selected) : emptyDraft(squadAgents));
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     const next = selectedId === "new" ? undefined : squads.find((squad) => squad.id === selectedId);
-    setDraft(next ? squadDraft(next) : emptyDraft(catalog.agents));
+    setDraft(next ? squadDraft(next) : emptyDraft(squadAgents));
     setError("");
     setConfirmDelete(false);
-  }, [catalog.agents, selectedId, squads]);
+  }, [selectedId, squadAgents, squads]);
 
-  const leader = catalog.agents.find((agent) => agent.id === draft.leaderAgentId);
-  const members = useMemo(() => catalog.agents.filter((agent) => draft.memberAgentIds.includes(agent.id)), [catalog.agents, draft.memberAgentIds]);
+  const leader = squadAgents.find((agent) => agent.id === draft.leaderAgentId);
+  const members = useMemo(() => squadAgents.filter((agent) => draft.memberAgentIds.includes(agent.id)), [draft.memberAgentIds, squadAgents]);
 
   const update = <K extends keyof SquadDraft>(key: K, value: SquadDraft[K]) => {
     setDraft((current) => Object.freeze({ ...current, [key]: value }));
@@ -144,7 +145,7 @@ export function AutomationStudioDialog({
           <header><div><small>SQUADS</small><strong>动态小队</strong></div><button type="button" aria-label="创建 Squad" onClick={() => setSelectedId("new")}><Plus size={14} /></button></header>
           <div>
             {squads.map((squad) => {
-              const squadLeader = catalog.agents.find((agent) => agent.id === squad.leaderAgentId);
+              const squadLeader = squadAgents.find((agent) => agent.id === squad.leaderAgentId);
               return (
                 <button type="button" className={selectedId === squad.id ? "is-selected" : ""} key={squad.id} onClick={() => setSelectedId(squad.id)}>
                   <span><Users size={13} /></span><div><strong>{squad.name}</strong><small>{squadLeader?.name ?? squad.leaderAgentId} · {squad.memberAgentIds.length} members</small></div>
@@ -166,7 +167,7 @@ export function AutomationStudioDialog({
             <section className="squad-role-section">
               <div><small>01 / LEADER</small><h4>选择 Squad Leader</h4><p>Leader 先执行并决定是否通过 @mention 委派成员。</p></div>
               <div className="squad-agent-grid">
-                {catalog.agents.map((agent) => (
+                {squadAgents.map((agent) => (
                   <button type="button" className={draft.leaderAgentId === agent.id ? "is-selected" : ""} key={agent.id} onClick={() => chooseLeader(agent.id)}>
                     <span><Bot size={13} /></span><div><strong>{agent.name}</strong><small>@{agent.id} · {agent.callsign}</small></div>{draft.leaderAgentId === agent.id && <Check size={13} />}
                   </button>
@@ -177,7 +178,7 @@ export function AutomationStudioDialog({
             <section className="squad-role-section">
               <div><small>02 / MEMBERS</small><h4>选择可委派成员</h4><p>最终输出中的精确 @id 或 @CALLSIGN 会生成真实子 AgentTask。</p></div>
               <div className="squad-agent-grid">
-                {catalog.agents.filter((agent) => agent.id !== draft.leaderAgentId).map((agent) => (
+                {squadAgents.filter((agent) => agent.id !== draft.leaderAgentId).map((agent) => (
                   <button type="button" className={draft.memberAgentIds.includes(agent.id) ? "is-selected" : ""} key={agent.id} onClick={() => toggleMember(agent.id)}>
                     <span><Bot size={13} /></span><div><strong>{agent.name}</strong><small>@{agent.id} · {agent.callsign}</small></div>{draft.memberAgentIds.includes(agent.id) && <Check size={13} />}
                   </button>

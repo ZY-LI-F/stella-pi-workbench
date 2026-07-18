@@ -60,6 +60,7 @@ describe("kanban domain", () => {
       activities: [],
       comments: [],
       agentTasks: [],
+      customAgents: [],
       squads: [],
       autopilots: [],
       autopilotRuns: [],

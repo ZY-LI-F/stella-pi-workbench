@@ -32,6 +32,7 @@ import {
   TASK_PRIORITIES,
   type BoardBootstrap,
   type CreateAutopilotInput,
+  type CreateProjectAgentInput,
   type CreateTaskCommentInput,
   type CreateTaskInput,
   type ExecutionTarget,
@@ -42,6 +43,7 @@ import {
   type ResolveGateInput,
   type UpdateTaskInput,
   type UpdateAutopilotInput,
+  type UpdateProjectAgentInput,
   type UpdateSquadInput,
 } from "../shared/kanban";
 import { BUILTIN_ORCHESTRATION_CATALOG } from "../shared/orchestration-catalog";
@@ -336,6 +338,50 @@ function validatedTaskComment(value: unknown): CreateTaskCommentInput {
     taskId: requiredString(input.taskId, "taskId"),
     body: textValue(input.body, "body"),
   });
+}
+
+function validatedProjectAgent(value: unknown): CreateProjectAgentInput {
+  const input = objectValue(value, "自定义 Agent 参数");
+  if (input.workspaceAccess !== "read" && input.workspaceAccess !== "write") throw new Error("workspaceAccess 必须是 read 或 write");
+  const thinking = textValue(input.thinking, "thinking");
+  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) throw new Error(`不支持的 thinking: ${thinking}`);
+  return Object.freeze({
+    name: textValue(input.name, "name"),
+    callsign: textValue(input.callsign, "callsign"),
+    responsibility: textValue(input.responsibility, "responsibility"),
+    instructions: textValue(input.instructions, "instructions"),
+    workspaceAccess: input.workspaceAccess,
+    allowedTools: stringArrayValue(input.allowedTools, "allowedTools"),
+    requiredSkills: input.requiredSkills === undefined ? undefined : stringArrayValue(input.requiredSkills, "requiredSkills"),
+    thinking: thinking as CreateProjectAgentInput["thinking"],
+    provider: input.provider === undefined ? undefined : textValue(input.provider, "provider"),
+    model: input.model === undefined ? undefined : textValue(input.model, "model"),
+    disableExtensions: booleanValue(input.disableExtensions, "disableExtensions"),
+    disableSkills: booleanValue(input.disableSkills, "disableSkills"),
+    disablePromptTemplates: booleanValue(input.disablePromptTemplates, "disablePromptTemplates"),
+    projectPath: textValue(input.projectPath, "projectPath"),
+  });
+}
+
+function validatedUpdateProjectAgent(value: unknown): UpdateProjectAgentInput {
+  const input = objectValue(value, "更新自定义 Agent 参数");
+  return Object.freeze({ ...validatedProjectAgent(input), agentId: requiredString(input.agentId, "agentId") });
+}
+
+async function createProjectAgentForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  assertTaskCapability();
+  if (!currentProject) throw new Error("尚未选择项目");
+  const input = validatedProjectAgent(value);
+  if (resolve(input.projectPath) !== currentProject.cwd) throw new Error("自定义 Agent 必须属于当前主进程工作区");
+  return boardService.createProjectAgent(Object.freeze({ ...input, projectPath: currentProject.cwd }));
+}
+
+async function updateProjectAgentForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  assertTaskCapability();
+  if (!currentProject) throw new Error("尚未选择项目");
+  const input = validatedUpdateProjectAgent(value);
+  if (resolve(input.projectPath) !== currentProject.cwd) throw new Error("自定义 Agent 必须属于当前主进程工作区");
+  return boardService.updateProjectAgent(Object.freeze({ ...input, projectPath: currentProject.cwd }));
 }
 
 function validatedCreateSquad(value: unknown): CreateSquadInput {
@@ -927,9 +973,23 @@ function registerIpcHandlers(): void {
     assertTaskCapability();
     return boardService.deleteTask(requiredString(taskId, "taskId"));
   });
-  ipcMain.handle("stella:board:add-comment", (_event, input: unknown) => {
+  ipcMain.handle("stella:board:add-comment", async (_event, input: unknown) => {
     assertTaskCapability();
-    return agentTaskService.addComment(validatedTaskComment(input));
+    const bootstrap = await agentTaskService.addComment(validatedTaskComment(input));
+    agentTaskRunner.notify();
+    return bootstrap;
+  });
+  ipcMain.handle("stella:board:create-agent", (_event, input: unknown) => createProjectAgentForCurrentProject(input));
+  ipcMain.handle("stella:board:update-agent", (_event, input: unknown) => updateProjectAgentForCurrentProject(input));
+  ipcMain.handle("stella:board:delete-agent", async (_event, agentId: unknown) => {
+    assertTaskCapability();
+    if (!currentProject) throw new Error("尚未选择项目");
+    const validatedId = requiredString(agentId, "agentId");
+    const state = await boardStore.read();
+    const agent = state.customAgents.find((candidate) => candidate.id === validatedId);
+    if (!agent) throw new Error(`找不到自定义 Agent: ${validatedId}`);
+    if (resolve(agent.projectPath) !== currentProject.cwd) throw new Error("只能删除当前项目的自定义 Agent");
+    return boardService.deleteProjectAgent(validatedId);
   });
   ipcMain.handle("stella:board:create-squad", (_event, input: unknown) => {
     assertTaskCapability();

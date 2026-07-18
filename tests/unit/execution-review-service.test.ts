@@ -74,6 +74,7 @@ function initialState(): BoardState {
       startedAt: CREATED_AT,
       completedAt: CREATED_AT,
     }],
+    customAgents: [],
     squads: [],
     autopilots: [],
     autopilotRuns: [],
@@ -103,14 +104,15 @@ function setup() {
 }
 
 describe("ExecutionReviewService", () => {
-  it("accepts a reported Workflow without moving the Task business stage", async () => {
+  it("accepts a reported Workflow and deterministically completes the Task", async () => {
     const { repository, service } = setup();
     expect(repository.state.runs[0]?.acceptance).toBe("pending");
 
     await service.review({ taskId: TASK.id, executionKind: "workflow", executionId: "run-reported", decision: "accept", comment: "" });
 
     expect(repository.state.runs[0]).toMatchObject({ acceptance: "accepted", reviewedAt: REVIEWED_AT });
-    expect(repository.state.tasks[0]).toMatchObject({ stage: "blocked", blockedReason: "业务阶段由用户维护" });
+    expect(repository.state.tasks[0]).toMatchObject({ stage: "completed" });
+    expect(repository.state.tasks[0]?.blockedReason).toBeUndefined();
     expect(repository.state.comments[0]).toMatchObject({ author: "user", messageKind: "acceptance", runId: "run-reported", body: "已接受" });
     expect(repository.state.activities[0]).toMatchObject({ kind: "gate", runId: "run-reported", summary: "执行结果已接受" });
   });
@@ -125,6 +127,7 @@ describe("ExecutionReviewService", () => {
       acceptanceComment: "补充 Windows 安装验证",
       reviewedAt: REVIEWED_AT,
     });
+    expect(repository.state.tasks[0]).toMatchObject({ stage: "planned" });
     const decided = repository.state;
     await expect(service.review({ taskId: TASK.id, executionKind: "agent-task", executionId: "agent-reported", decision: "accept", comment: "改成接受" }))
       .rejects.toThrow("验收结论已记录");

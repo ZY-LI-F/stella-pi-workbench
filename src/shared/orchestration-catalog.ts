@@ -1,14 +1,32 @@
-import type { AgentDefinition, OrchestrationCatalog, TeamDefinition, WorkflowDefinition } from "./kanban";
+import type { AgentDefinition, BoardState, OrchestrationCatalog, TeamDefinition, WorkflowDefinition } from "./kanban";
 
 const READ_TOOLS = Object.freeze(["read", "grep", "find", "ls"]);
 const WRITE_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash", "edit", "write"]);
 const VERIFY_TOOLS = Object.freeze(["read", "grep", "find", "ls", "bash"]);
 
 function agent(definition: AgentDefinition): AgentDefinition {
-  return Object.freeze({ ...definition, allowedTools: Object.freeze([...definition.allowedTools]) });
+  return Object.freeze({
+    ...definition,
+    allowedTools: Object.freeze([...definition.allowedTools]),
+    requiredSkills: definition.requiredSkills ? Object.freeze([...definition.requiredSkills]) : undefined,
+  });
 }
 
 export const BUILTIN_AGENTS: readonly AgentDefinition[] = Object.freeze([
+  agent({
+    id: "lead",
+    version: 1,
+    name: "通用调度负责人",
+    callsign: "LEAD",
+    responsibility: "澄清目标、拆解工作、选择合适 Agent，并在成员报告后独立验收或要求修订。",
+    instructions: "你是 Stella 的通用调度负责人。你不修改项目；所有委派、追问和完成判断必须通过 Stella Coordinator 的结构化行动协议表达，不得用自然语言 @mention 冒充已分发。",
+    workspaceAccess: "read",
+    allowedTools: READ_TOOLS,
+    thinking: "high",
+    disableExtensions: true,
+    disableSkills: true,
+    disablePromptTemplates: true,
+  }),
   agent({
     id: "scout",
     version: 1,
@@ -79,6 +97,66 @@ export const BUILTIN_AGENTS: readonly AgentDefinition[] = Object.freeze([
     disableSkills: true,
     disablePromptTemplates: true,
   }),
+  agent({
+    id: "target-biologist",
+    version: 1,
+    name: "靶点生物学研究员",
+    callsign: "BIO",
+    responsibility: "标准化靶点身份，汇总人类疾病关联、组织/细胞表达和可成药证据，形成可追溯证据包。",
+    instructions: "你是医药早研靶点生物学研究员。必须先遵循 target-evidence Skill；区分人类遗传、表达、机制、转化与推断证据，记录数据快照日期和原始来源。不得把相关性表述为因果性。",
+    workspaceAccess: "write",
+    allowedTools: VERIFY_TOOLS,
+    requiredSkills: ["target-evidence"],
+    thinking: "high",
+    disableExtensions: true,
+    disableSkills: false,
+    disablePromptTemplates: true,
+  }),
+  agent({
+    id: "clinical-intelligence",
+    version: 1,
+    name: "临床竞品分析师",
+    callsign: "CLINICAL",
+    responsibility: "按资产、申办方、适应症、阶段和状态核验临床竞争格局，并识别终止、拥挤度与差异化窗口。",
+    instructions: "你是临床竞品分析师。必须先遵循 clinical-landscape Skill；ClinicalTrials.gov 状态优先于二手聚合站，申办方管线用于补充。对每条资产给出 NCT 编号、状态更新时间和来源，不得把公告中的计划当作已完成事实。",
+    workspaceAccess: "write",
+    allowedTools: VERIFY_TOOLS,
+    requiredSkills: ["clinical-landscape"],
+    thinking: "high",
+    disableExtensions: true,
+    disableSkills: false,
+    disablePromptTemplates: true,
+  }),
+  agent({
+    id: "target-strategist",
+    version: 1,
+    name: "靶点策略负责人",
+    callsign: "STRATEGY",
+    responsibility: "把生物学与竞品证据整合为带评分、假设、风险和下一步实验的早研决策报告。",
+    instructions: "你是早研靶点评估负责人。必须遵循 target-assessment-report Skill，独立核对上游证据后输出决策级 Markdown；评分要能追溯到证据，不确定项不得用平均分掩盖。",
+    workspaceAccess: "read",
+    allowedTools: READ_TOOLS,
+    requiredSkills: ["target-assessment-report"],
+    thinking: "high",
+    disableExtensions: true,
+    disableSkills: false,
+    disablePromptTemplates: true,
+  }),
+  agent({
+    id: "evidence-auditor",
+    version: 1,
+    name: "证据审计员",
+    callsign: "EVIDENCE",
+    responsibility: "反向核对报告中的来源、时间、证据等级、竞争状态、评分计算和过度推断。",
+    instructions: "你是独立证据审计员。必须遵循 target-assessment-report Skill；逐条核查可证伪事实、链接、时间戳和评分算术，优先指出会改变 Go/No-Go 结论的问题。不得为了给出结论而补造缺失证据。",
+    workspaceAccess: "read",
+    allowedTools: READ_TOOLS,
+    requiredSkills: ["target-assessment-report"],
+    thinking: "high",
+    disableExtensions: true,
+    disableSkills: false,
+    disablePromptTemplates: true,
+  }),
 ]);
 
 function team(definition: TeamDefinition): TeamDefinition {
@@ -92,6 +170,7 @@ export const BUILTIN_TEAMS: readonly TeamDefinition[] = Object.freeze([
     name: "交付小队",
     summary: "从勘察、规划到实现、验证和独立审阅的完整交付团队。",
     roles: [
+      { id: "coordination", label: "调度", agentId: "lead" },
       { id: "discovery", label: "勘察", agentId: "scout" },
       { id: "planning", label: "规划", agentId: "planner" },
       { id: "implementation", label: "实现", agentId: "builder" },
@@ -120,6 +199,18 @@ export const BUILTIN_TEAMS: readonly TeamDefinition[] = Object.freeze([
     roles: [
       { id: "context", label: "上下文", agentId: "scout" },
       { id: "review", label: "审阅", agentId: "reviewer" },
+    ],
+  }),
+  team({
+    id: "early-target-squad",
+    version: 1,
+    name: "早研靶评小队",
+    summary: "围绕靶点生物学、临床竞品、组合决策和独立证据审计组成的医药早研固定团队。",
+    roles: [
+      { id: "biology", label: "生物学证据", agentId: "target-biologist" },
+      { id: "competition", label: "临床竞品", agentId: "clinical-intelligence" },
+      { id: "strategy", label: "组合策略", agentId: "target-strategist" },
+      { id: "audit", label: "证据审计", agentId: "evidence-auditor" },
     ],
   }),
 ]);
@@ -176,6 +267,22 @@ export const BUILTIN_WORKFLOWS: readonly WorkflowDefinition[] = Object.freeze([
       { kind: "human-gate", id: "accept", name: "审阅确认", summary: "等待人工确认结论", instructions: "查看审阅发现并明确确认或驳回。" },
     ],
   }),
+  workflow({
+    id: "early-target-assessment",
+    version: 1,
+    name: "早研靶点评估流程",
+    shortName: "早研靶评",
+    summary: "先建立靶点与临床竞争证据包，经人工确认范围后形成评分报告并完成独立证据审计。",
+    teamId: "early-target-squad",
+    steps: [
+      { kind: "agent", id: "biology", name: "靶点证据", summary: "身份、疾病、表达与可成药性", agentId: "target-biologist", objective: "标准化目标基因/蛋白身份，采集 Open Targets、Human Protein Atlas 与 ChEMBL 证据，保存原始响应并形成带来源的生物学证据包。" },
+      { kind: "agent", id: "competition", name: "竞品扫描", summary: "资产、试验、状态与差异化", agentId: "clinical-intelligence", objective: "检索靶点直接抑制剂的临床试验与申办方信息，按资产去重并报告阶段、状态、更新时间、终止原因和竞争空白。" },
+      { kind: "human-gate", id: "scope-review", name: "证据范围确认", summary: "确认适应症、竞争边界与证据缺口", instructions: "检查靶点身份、证据快照日期、纳入/排除规则和临床资产去重结果；范围合理后再进入组合决策。" },
+      { kind: "agent", id: "synthesis", name: "决策报告", summary: "评分、风险与实验建议", agentId: "target-strategist", objective: "整合已批准的上游证据，按统一评分卡输出靶点评估报告；包含结论、适应症假设、竞争定位、关键风险、证据缺口和可证伪的下一步实验。" },
+      { kind: "agent", id: "audit", name: "证据审计", summary: "核对来源、日期、推断和评分", agentId: "evidence-auditor", objective: "对决策报告实施独立审计，列出通过项、会改变结论的问题和必要修订；明确最终结论是否得到当前证据支持。" },
+      { kind: "human-gate", id: "accept", name: "组合评审", summary: "人工决定接受、驳回或补证", instructions: "核对报告与审计结果后，明确记录是否接受本次靶点评估及其适用边界。" },
+    ],
+  }),
 ]);
 
 export const BUILTIN_ORCHESTRATION_CATALOG: OrchestrationCatalog = Object.freeze({
@@ -183,6 +290,17 @@ export const BUILTIN_ORCHESTRATION_CATALOG: OrchestrationCatalog = Object.freeze
   teams: BUILTIN_TEAMS,
   workflows: BUILTIN_WORKFLOWS,
 });
+
+export function catalogForBoard(base: OrchestrationCatalog, board: Pick<BoardState, "customAgents">): OrchestrationCatalog {
+  const agents = [...base.agents, ...board.customAgents];
+  if (new Set(agents.map((agent) => agent.id.toLocaleLowerCase())).size !== agents.length) throw new Error("编排目录包含重复 Agent id");
+  if (new Set(agents.map((agent) => agent.callsign.toLocaleLowerCase())).size !== agents.length) throw new Error("编排目录包含重复 Agent callsign");
+  return Object.freeze({
+    agents: Object.freeze(agents),
+    teams: base.teams,
+    workflows: base.workflows,
+  });
+}
 
 export function findWorkflow(workflowId: string): WorkflowDefinition {
   const workflow = BUILTIN_WORKFLOWS.find((candidate) => candidate.id === workflowId);

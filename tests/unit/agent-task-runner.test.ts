@@ -110,7 +110,7 @@ describe("AgentTaskRunner", () => {
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
     const first = repository.state.agentTasks.find((task) => task.taskId === firstTaskId);
     expect(first).toMatchObject({ status: "reported", acceptance: "pending", output: "真实 Agent 产物", sessionPath: "C:/agent-task.jsonl", inputTokens: 12, outputTokens: 34, cost: 0.02 });
-    expect(repository.state.tasks.find((task) => task.id === firstTaskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === firstTaskId)?.stage).toBe("review");
     expect(repository.state.comments.some((comment) => comment.taskId === firstTaskId && comment.author === "agent" && comment.body === "真实 Agent 产物")).toBe(true);
     expect(repository.state.agentTasks.find((task) => task.taskId === secondTaskId)?.status).toBe("running");
   });
@@ -125,7 +125,7 @@ describe("AgentTaskRunner", () => {
     await runner.abortTask(taskId);
     runtime?.settle();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
     expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("interrupted");
     expect(repository.state.comments.some((comment) => comment.author === "agent")).toBe(false);
     expect(runtime?.abortAndStop).toHaveBeenCalledOnce();
@@ -149,7 +149,7 @@ describe("AgentTaskRunner", () => {
 
     expect(runtimeFactory.runtimes).toHaveLength(0);
     expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("cancelled");
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
   });
 
   it("persists startup failures and continues with the next queued AgentTask", async () => {
@@ -191,7 +191,7 @@ describe("AgentTaskRunner", () => {
     await vi.waitFor(() => expect(repository.state.agentTasks.find((agentTask) => agentTask.taskId === taskId)?.status).toBe("failed"));
     expect(runtimeFactory.runtimes).toHaveLength(0);
     expect(repository.state.agentTasks.find((agentTask) => agentTask.taskId === taskId)?.error).toContain("未验证工具: bash");
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
   });
 
   it("turns user comment mentions into one serial parent-child execution group", async () => {
@@ -208,6 +208,73 @@ describe("AgentTaskRunner", () => {
     await expect(agentTaskService.addComment({ taskId, body: "请交给 @missing" })).rejects.toThrow("未知 Agent mention");
     expect(repository.state.comments).toHaveLength(before.comments.length);
     expect(repository.state.agentTasks).toHaveLength(before.agentTasks.length);
+  });
+
+  it("lets @lead delegate with a strict action, review worker evidence, and report for human acceptance", async () => {
+    const runtimeFactory = new FakeAgentRuntimeFactory([
+      JSON.stringify({ action: "delegate", summary: "先实现再由我验收", delegations: [{ agentId: "builder", objective: "完成真实修改", acceptanceCriteria: "测试通过并报告证据" }] }),
+      "实现完成；npm test 通过。",
+      JSON.stringify({ action: "complete", summary: "Builder 已报告真实修改和测试证据", delegations: [] }),
+    ]);
+    const { repository, agentTaskService, runner, createTask } = await setup(runtimeFactory);
+    const taskId = await createTask("LEAD 团队任务");
+    await agentTaskService.addComment({ taskId, body: "@lead 请拆解、委派并验收这个任务" });
+    runner.start();
+
+    await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(1));
+    expect(runtimeFactory.runtimes[0]?.commands.find((command) => command.type === "prompt")).toMatchObject({ type: "prompt", message: expect.stringContaining("严格行动协议") });
+    runtimeFactory.runtimes[0]?.settle();
+    await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
+    const root = repository.state.agentTasks.find((task) => task.kind === "coordinator");
+    expect(root).toMatchObject({ status: "waiting_children", agentSnapshot: { id: "lead" } });
+    expect(repository.state.agentTasks.find((task) => task.kind === "delegated")).toMatchObject({ status: "running", agentSnapshot: { id: "builder" }, parentAgentTaskId: root?.id });
+
+    runtimeFactory.runtimes[1]?.settle();
+    await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(3));
+    expect(repository.state.agentTasks.find((task) => task.kind === "coordinator-review")?.status).toBe("running");
+    runtimeFactory.runtimes[2]?.settle();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.id === root?.id)?.status).toBe("reported"));
+
+    expect(repository.state.tasks.find((task) => task.id === taskId)).toMatchObject({ stage: "review", activeAgentTaskId: undefined });
+    expect(repository.state.agentTasks.find((task) => task.id === root?.id)).toMatchObject({ acceptance: "pending" });
+    expect(repository.state.comments.some((comment) => comment.authorAgentId === "lead" && comment.body.includes("Builder 已报告"))).toBe(true);
+  });
+
+  it("resumes a waiting LEAD from a normal Task Room reply", async () => {
+    const runtimeFactory = new FakeAgentRuntimeFactory([
+      JSON.stringify({ action: "ask_human", summary: "存在两个互斥范围", delegations: [], question: "选择 A 还是 B？" }),
+      JSON.stringify({ action: "complete", summary: "用户选择 A，规划结论已明确", delegations: [] }),
+    ]);
+    const { repository, agentTaskService, runner, createTask } = await setup(runtimeFactory);
+    const taskId = await createTask("需要用户决定");
+    await agentTaskService.addComment({ taskId, body: "@LEAD 请先澄清范围" });
+    runner.start();
+    await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(1));
+    runtimeFactory.runtimes[0]?.settle();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "coordinator")?.status).toBe("waiting_human"));
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("review");
+
+    await agentTaskService.addComment({ taskId, body: "选择 A，并保持当前兼容边界。" });
+    runner.notify();
+    await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
+    expect(runtimeFactory.runtimes[1]?.commands.find((command) => command.type === "prompt")).toMatchObject({ type: "prompt", message: expect.stringContaining("选择 A，并保持当前兼容边界") });
+    runtimeFactory.runtimes[1]?.settle();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "coordinator")?.status).toBe("reported"));
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("review");
+  });
+
+  it("blocks the task when LEAD emits prose instead of the structured action protocol", async () => {
+    const runtimeFactory = new FakeAgentRuntimeFactory("请让 @builder 开始工作");
+    const { repository, agentTaskService, runner, createTask } = await setup(runtimeFactory);
+    const taskId = await createTask("拒绝隐式委派");
+    await agentTaskService.addComment({ taskId, body: "@lead 请处理" });
+    runner.start();
+    await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(1));
+    runtimeFactory.runtimes[0]?.settle();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "coordinator")?.status).toBe("failed"));
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
+    expect(repository.state.agentTasks.find((task) => task.kind === "coordinator")?.error).toContain("不是有效的 Coordinator JSON");
+    expect(repository.state.agentTasks.some((task) => task.kind === "delegated")).toBe(false);
   });
 
   it("executes Squad Leader mentions as real children and completes only after every child", async () => {
@@ -240,7 +307,7 @@ describe("AgentTaskRunner", () => {
     expect(repository.state.agentTasks.find((task) => task.id === leader?.id)?.status).toBe("waiting_children");
     runtimeFactory.runtimes[2]?.settle();
     await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.id === leader?.id)?.status).toBe("reported"));
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("review");
     expect(repository.state.agentTasks.find((task) => task.id === leader?.id)).toMatchObject({ status: "reported", acceptance: "pending" });
     expect(repository.state.comments.filter((comment) => comment.taskId === taskId && comment.author === "agent")).toHaveLength(3);
   });
@@ -265,7 +332,7 @@ describe("AgentTaskRunner", () => {
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
     runtimeFactory.runtimes[1]?.exit();
     await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "squad-leader")?.status).toBe("failed"));
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
     const leader = repository.state.agentTasks.find((task) => task.kind === "squad-leader");
     const children = repository.state.agentTasks.filter((task) => task.parentAgentTaskId === leader?.id);
     expect(leader?.status).toBe("failed");
@@ -302,7 +369,7 @@ describe("AgentTaskRunner", () => {
     const recoveredRunner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory: new FakeAgentRuntimeFactory(), emitBoardEvent: () => undefined, admission });
     recoveredRunner.start();
     await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "squad-leader")?.status).toBe("failed"));
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
     const leader = repository.state.agentTasks.find((task) => task.kind === "squad-leader");
     expect(leader?.status).toBe("failed");
     expect(repository.state.agentTasks.filter((task) => task.parentAgentTaskId === leader?.id).map((task) => task.status)).toEqual(["interrupted", "cancelled"]);

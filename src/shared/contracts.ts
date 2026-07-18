@@ -11,6 +11,7 @@ import type {
   BoardBootstrap,
   BoardBridgeEvent,
   CreateAutopilotInput,
+  CreateProjectAgentInput,
   CreateTaskCommentInput,
   CreateSquadInput,
   CreateTaskInput,
@@ -20,6 +21,7 @@ import type {
   ResolveGateInput,
   UpdateTaskInput,
   UpdateAutopilotInput,
+  UpdateProjectAgentInput,
   UpdateSquadInput,
 } from "./kanban";
 import type { CapabilityHealthSnapshot, CapabilityName } from "./capabilities";
@@ -211,6 +213,9 @@ export interface StellaDesktopApi {
   boardMoveTask(taskId: string, stage: ManualTaskStage): Promise<BoardBootstrap>;
   boardDeleteTask(taskId: string): Promise<BoardBootstrap>;
   boardAddComment(input: CreateTaskCommentInput): Promise<BoardBootstrap>;
+  boardCreateAgent(input: CreateProjectAgentInput): Promise<BoardBootstrap>;
+  boardUpdateAgent(input: UpdateProjectAgentInput): Promise<BoardBootstrap>;
+  boardDeleteAgent(agentId: string): Promise<BoardBootstrap>;
   boardCreateSquad(input: CreateSquadInput): Promise<BoardBootstrap>;
   boardUpdateSquad(input: UpdateSquadInput): Promise<BoardBootstrap>;
   boardDeleteSquad(squadId: string): Promise<BoardBootstrap>;
