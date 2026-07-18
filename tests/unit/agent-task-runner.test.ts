@@ -8,6 +8,7 @@ import { AgentTaskService } from "../../src/main/agent-task-service";
 import { BoardService } from "../../src/main/board-service";
 import type { BoardRepository } from "../../src/main/board-repository";
 import { SquadService } from "../../src/main/squad-service";
+import { WorkspaceAdmission } from "../../src/main/workspace-admission";
 
 class MemoryRepository implements BoardRepository {
   state: BoardState = EMPTY_BOARD_STATE;
@@ -73,7 +74,8 @@ async function setup(runtimeFactory = new FakeAgentRuntimeFactory()) {
   const agentTaskService = new AgentTaskService({ repository, catalog: BUILTIN_ORCHESTRATION_CATALOG, emitChanged: () => undefined, id, now });
   const squadService = new SquadService({ repository, catalog: BUILTIN_ORCHESTRATION_CATALOG, emitChanged: () => undefined, id, now });
   const events: unknown[] = [];
-  const runner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory, emitBoardEvent: (event) => events.push(event) });
+  const admission = new WorkspaceAdmission({ canonicalize: async (path) => path.toLocaleLowerCase("en-US") });
+  const runner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory, emitBoardEvent: (event) => events.push(event), admission });
 
   const createTask = async (title: string, executionTarget: ExecutionTarget = { kind: "agent", agentId: "builder" }) => {
     await boardService.createTask({
@@ -86,7 +88,7 @@ async function setup(runtimeFactory = new FakeAgentRuntimeFactory()) {
     return task.id;
   };
 
-  return { repository, boardService, agentTaskService, squadService, runtimeFactory, runner, events, createTask };
+  return { repository, boardService, agentTaskService, squadService, runtimeFactory, runner, admission, events, createTask };
 }
 
 describe("AgentTaskRunner", () => {
@@ -107,8 +109,8 @@ describe("AgentTaskRunner", () => {
     runtimeFactory.runtimes[0]?.settle();
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
     const first = repository.state.agentTasks.find((task) => task.taskId === firstTaskId);
-    expect(first).toMatchObject({ status: "succeeded", output: "真实 Agent 产物", sessionPath: "C:/agent-task.jsonl", inputTokens: 12, outputTokens: 34, cost: 0.02 });
-    expect(repository.state.tasks.find((task) => task.id === firstTaskId)?.status).toBe("review");
+    expect(first).toMatchObject({ status: "reported", acceptance: "pending", output: "真实 Agent 产物", sessionPath: "C:/agent-task.jsonl", inputTokens: 12, outputTokens: 34, cost: 0.02 });
+    expect(repository.state.tasks.find((task) => task.id === firstTaskId)?.stage).toBe("planned");
     expect(repository.state.comments.some((comment) => comment.taskId === firstTaskId && comment.author === "agent" && comment.body === "真实 Agent 产物")).toBe(true);
     expect(repository.state.agentTasks.find((task) => task.taskId === secondTaskId)?.status).toBe("running");
   });
@@ -123,10 +125,31 @@ describe("AgentTaskRunner", () => {
     await runner.abortTask(taskId);
     runtime?.settle();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(repository.state.tasks.find((task) => task.id === taskId)?.status).toBe("interrupted");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
     expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("interrupted");
     expect(repository.state.comments.some((comment) => comment.author === "agent")).toBe(false);
     expect(runtime?.abortAndStop).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a workspace waiter without launching it after the owner releases", async () => {
+    const { repository, agentTaskService, runtimeFactory, runner, admission, createTask } = await setup();
+    const owner = await admission.acquireInteractive("C:/project", {
+      id: "interactive-owner",
+      kind: "interactive",
+      label: "Interactive Pi",
+    });
+    const taskId = await createTask("排队后取消");
+    await agentTaskService.dispatchDirect(taskId);
+    runner.start();
+    await vi.waitFor(() => expect(repository.state.activities.some((activity) => activity.taskId === taskId && activity.summary.includes("等待项目写入席位"))).toBe(true));
+
+    await runner.abortTask(taskId);
+    owner.release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtimeFactory.runtimes).toHaveLength(0);
+    expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("cancelled");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
   });
 
   it("persists startup failures and continues with the next queued AgentTask", async () => {
@@ -144,6 +167,31 @@ describe("AgentTaskRunner", () => {
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
     expect(repository.state.agentTasks.find((task) => task.taskId === firstTaskId)).toMatchObject({ status: "failed", error: "无法启动真实 Pi Runtime" });
     expect(repository.state.agentTasks.find((task) => task.taskId === secondTaskId)?.status).toBe("running");
+  });
+
+  it("rejects an unsafe read-only tool snapshot before creating a Runtime", async () => {
+    const { repository, agentTaskService, runtimeFactory, runner, createTask } = await setup();
+    const taskId = await createTask("伪只读权限");
+    await agentTaskService.dispatchDirect(taskId);
+    await repository.update((current) => ({
+      ...current,
+      agentTasks: current.agentTasks.map((agentTask) => agentTask.taskId === taskId
+        ? Object.freeze({
+            ...agentTask,
+            agentSnapshot: Object.freeze({
+              ...agentTask.agentSnapshot,
+              workspaceAccess: "read" as const,
+              allowedTools: Object.freeze(["read", "bash"]),
+            }),
+          })
+        : agentTask),
+    }));
+
+    runner.start();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((agentTask) => agentTask.taskId === taskId)?.status).toBe("failed"));
+    expect(runtimeFactory.runtimes).toHaveLength(0);
+    expect(repository.state.agentTasks.find((agentTask) => agentTask.taskId === taskId)?.error).toContain("未验证工具: bash");
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
   });
 
   it("turns user comment mentions into one serial parent-child execution group", async () => {
@@ -191,8 +239,9 @@ describe("AgentTaskRunner", () => {
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(3));
     expect(repository.state.agentTasks.find((task) => task.id === leader?.id)?.status).toBe("waiting_children");
     runtimeFactory.runtimes[2]?.settle();
-    await vi.waitFor(() => expect(repository.state.tasks.find((task) => task.id === taskId)?.status).toBe("review"));
-    expect(repository.state.agentTasks.find((task) => task.id === leader?.id)?.status).toBe("succeeded");
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.id === leader?.id)?.status).toBe("reported"));
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+    expect(repository.state.agentTasks.find((task) => task.id === leader?.id)).toMatchObject({ status: "reported", acceptance: "pending" });
     expect(repository.state.comments.filter((comment) => comment.taskId === taskId && comment.author === "agent")).toHaveLength(3);
   });
 
@@ -215,7 +264,8 @@ describe("AgentTaskRunner", () => {
     runtimeFactory.runtimes[0]?.settle();
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(2));
     runtimeFactory.runtimes[1]?.exit();
-    await vi.waitFor(() => expect(repository.state.tasks.find((task) => task.id === taskId)?.status).toBe("failed"));
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "squad-leader")?.status).toBe("failed"));
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
     const leader = repository.state.agentTasks.find((task) => task.kind === "squad-leader");
     const children = repository.state.agentTasks.filter((task) => task.parentAgentTaskId === leader?.id);
     expect(leader?.status).toBe("failed");
@@ -224,7 +274,7 @@ describe("AgentTaskRunner", () => {
 
   it("reconciles a waiting parent when startup recovery finds an interrupted child", async () => {
     const runtimeFactory = new FakeAgentRuntimeFactory(["委派 @builder @VERIFY", "不会结算"]);
-    const { repository, agentTaskService, squadService, runner, createTask } = await setup(runtimeFactory);
+    const { repository, agentTaskService, squadService, runner, admission, createTask } = await setup(runtimeFactory);
     await squadService.create({
       name: "恢复检查组",
       description: "测试重启恢复",
@@ -249,9 +299,10 @@ describe("AgentTaskRunner", () => {
         : task),
     }));
 
-    const recoveredRunner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory: new FakeAgentRuntimeFactory(), emitBoardEvent: () => undefined });
+    const recoveredRunner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory: new FakeAgentRuntimeFactory(), emitBoardEvent: () => undefined, admission });
     recoveredRunner.start();
-    await vi.waitFor(() => expect(repository.state.tasks.find((task) => task.id === taskId)?.status).toBe("failed"));
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "squad-leader")?.status).toBe("failed"));
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
     const leader = repository.state.agentTasks.find((task) => task.kind === "squad-leader");
     expect(leader?.status).toBe("failed");
     expect(repository.state.agentTasks.filter((task) => task.parentAgentTaskId === leader?.id).map((task) => task.status)).toEqual(["interrupted", "cancelled"]);

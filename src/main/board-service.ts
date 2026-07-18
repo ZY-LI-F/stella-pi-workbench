@@ -8,7 +8,7 @@ import {
   type CreateTaskInput,
   type ExecutionTarget,
   type KanbanTask,
-  type ManualTaskStatus,
+  type ManualTaskStage,
   type OrchestrationCatalog,
   type TaskActivity,
   type UpdateTaskInput,
@@ -62,7 +62,9 @@ export class BoardService {
         projectName: normalizedText(input.projectName, "项目名称", true),
         trusted: input.trusted,
         executionTarget: Object.freeze({ ...input.executionTarget }),
-        status: "planned",
+        stage: "planned",
+        sourcePiSessionPath: input.sourcePiSessionPath,
+        sourcePiSessionId: input.sourcePiSessionId,
         createdAt: now,
         updatedAt: now,
       });
@@ -98,23 +100,23 @@ export class BoardService {
     });
   }
 
-  async moveTask(taskId: string, status: ManualTaskStatus): Promise<BoardBootstrap> {
+  async moveTask(taskId: string, stage: ManualTaskStage): Promise<BoardBootstrap> {
     const now = this.#now();
     return this.#commit((current) => {
       const task = this.#task(current, taskId);
-      if (!canMoveTaskManually(task, status)) {
+      if (!canMoveTaskManually(task, stage)) {
         throw new Error("只能把未运行的任务手动移到待规划、受阻或已完成列");
       }
       const nextTask: KanbanTask = Object.freeze({
         ...task,
-        status,
-        blockedReason: status === "blocked" ? "由用户手动标记为受阻" : undefined,
+        stage,
+        blockedReason: stage === "blocked" ? "由用户手动标记为受阻" : undefined,
         updatedAt: now,
       });
       return {
         ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id ? nextTask : candidate),
-        activities: [...current.activities, this.#activity(task.id, "status", `任务已移到${status === "planned" ? "待规划" : status === "blocked" ? "受阻" : "已完成"}`, undefined, now)],
+        activities: [...current.activities, this.#activity(task.id, "status", `任务已移到${stage === "planned" ? "待规划" : stage === "blocked" ? "受阻" : "已完成"}`, undefined, now)],
       };
     });
   }

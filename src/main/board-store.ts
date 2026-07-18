@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   EMPTY_BOARD_STATE,
+  BOARD_SCHEMA_V2,
   LEGACY_BOARD_SCHEMA_VERSION,
   parseBoardFile,
   parseBoardState,
@@ -68,18 +69,14 @@ export class BoardStore implements BoardRepository {
           if (interruptedIds.has(task.activeRunId ?? "")) {
             return Object.freeze({
               ...task,
-              status: "interrupted" as const,
               activeRunId: undefined,
-              blockedReason: "Stella 在流程运行期间退出。",
               updatedAt: now,
             });
           }
           if (interruptedAgentTaskIds.has(task.activeAgentTaskId ?? "")) {
             return Object.freeze({
               ...task,
-              status: "interrupted" as const,
               activeAgentTaskId: undefined,
-              blockedReason: "Stella 在 Agent 执行期间退出。",
               updatedAt: now,
             });
           }
@@ -140,14 +137,12 @@ export class BoardStore implements BoardRepository {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`无法解析看板文件 ${this.#path}: ${message}`);
       }
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        !Array.isArray(parsed) &&
-        (parsed as Record<string, unknown>).version === LEGACY_BOARD_SCHEMA_VERSION
-      ) {
+      const sourceVersion = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>).version
+        : undefined;
+      if (sourceVersion === LEGACY_BOARD_SCHEMA_VERSION || sourceVersion === BOARD_SCHEMA_V2) {
         const timestamp = this.#dependencies.now().replaceAll(":", "-");
-        const backupPath = `${this.#path}.v1.${timestamp}.${this.#dependencies.id()}.bak`;
+        const backupPath = `${this.#path}.v${sourceVersion}.${timestamp}.${this.#dependencies.id()}.bak`;
         await copyFile(this.#path, backupPath);
         try {
           const migrated = parseBoardFile(parsed).state;
@@ -155,7 +150,7 @@ export class BoardStore implements BoardRepository {
           return migrated;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`迁移 schema v1 看板失败；原文件未修改，备份位于 ${backupPath}: ${message}`);
+          throw new Error(`迁移 schema v${sourceVersion} 看板失败；原文件未修改，备份位于 ${backupPath}: ${message}`);
         }
       }
       return parseBoardFile(parsed).state;

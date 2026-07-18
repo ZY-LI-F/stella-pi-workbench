@@ -27,6 +27,7 @@ import type {
   SessionTreeSummary,
   SlashCommandSummary,
 } from "../shared/contracts";
+import { CAPABILITY_NAMES, type CapabilityHealthSnapshot, type CapabilityName } from "../shared/capabilities";
 import {
   TASK_PRIORITIES,
   type BoardBootstrap,
@@ -35,7 +36,9 @@ import {
   type CreateTaskInput,
   type ExecutionTarget,
   type CreateSquadInput,
-  type ManualTaskStatus,
+  type ManualTaskStage,
+  type OpenTaskSessionInput,
+  type ReviewExecutionInput,
   type ResolveGateInput,
   type UpdateTaskInput,
   type UpdateAutopilotInput,
@@ -47,12 +50,18 @@ import { AgentTaskService } from "./agent-task-service";
 import { AutopilotService } from "./autopilot-service";
 import { BoardService } from "./board-service";
 import { BoardStore } from "./board-store";
+import { CapabilityHealthStore } from "./capability-health";
+import { ExecutionReviewService } from "./execution-review-service";
+import { InteractiveCommandRouter } from "./interactive-command-router";
 import { PiRpcRuntime } from "./pi-rpc-runtime";
 import { ScheduleRunner } from "./schedule-runner";
 import { StateStore } from "./state-store";
 import { SquadService } from "./squad-service";
 import { WorkflowOrchestrator, type WorkflowRuntimeFactory } from "./workflow-orchestrator";
 import { WebhookServer, webhookMaxBytesFromEnvironment, webhookPortFromEnvironment } from "./webhook-server";
+import { WorkspaceAdmission } from "./workspace-admission";
+import { visibleInteractiveSessions } from "../shared/session-policy";
+import { resolveTaskSessionTarget } from "../shared/task-session-bridge";
 
 const rpcEntryPath = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
 const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
@@ -132,24 +141,66 @@ let boardService: BoardService;
 let workflowOrchestrator: WorkflowOrchestrator;
 let agentTaskService: AgentTaskService;
 let agentTaskRunner: AgentTaskRunner;
+let executionReviewService: ExecutionReviewService;
 let squadService: SquadService;
 let autopilotService: AutopilotService;
 let scheduleRunner: ScheduleRunner;
 let webhookServer: WebhookServer;
 const singleInstanceLock = app.requestSingleInstanceLock();
 
-function broadcast(source: "pi" | "runtime" | "board", payload: unknown): void {
+function broadcast(source: "pi" | "runtime" | "board" | "capability", payload: unknown): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("stella:event", { source, payload });
+}
+
+const capabilityHealth = new CapabilityHealthStore({
+  now: () => new Date().toISOString(),
+  emitChanged: (snapshot) => broadcast("capability", { type: "capability-health", snapshot }),
+});
+const workspaceAdmission = new WorkspaceAdmission();
+let interactiveCommandRouter: InteractiveCommandRouter | undefined;
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function assertTaskCapability(): void {
+  const health = capabilityHealth.snapshot().task;
+  if (health.state !== "ready") throw new Error(`Task Control 不可用：${health.error ?? health.state}`);
+}
+
+function assertPiExecutionCapability(): void {
+  const health = capabilityHealth.snapshot().pi;
+  if (health.state !== "ready") throw new Error(`Pi Runtime 不可用于任务执行：${health.error ?? health.state}`);
+}
+
+function validatedCapabilityName(value: unknown): CapabilityName {
+  if (typeof value !== "string" || !CAPABILITY_NAMES.includes(value as CapabilityName)) {
+    throw new Error(`未知 Capability: ${String(value)}`);
+  }
+  return value as CapabilityName;
 }
 
 const runtime = new PiRpcRuntime({
   executablePath: process.execPath,
   rpcEntryPath,
   spawnProcess: (command, args, options) => spawn(command, [...args], options),
-  emitPiEvent: (event) => broadcast("pi", event),
-  emitRuntimeSignal: (signal) => broadcast("runtime", signal),
+  emitPiEvent: (event) => {
+    interactiveCommandRouter?.handlePiEvent(event);
+    broadcast("pi", event);
+  },
+  emitRuntimeSignal: (signal) => {
+    interactiveCommandRouter?.handleRuntimeSignal(signal);
+    if (signal.type === "runtime_exit") {
+      capabilityHealth.set("pi", "error", `Pi RPC 意外退出 (code=${String(signal.code)}, signal=${String(signal.signal)})`);
+    } else if (signal.type === "protocol_error") {
+      capabilityHealth.set("pi", "degraded", `Pi RPC 协议错误：${signal.message}`);
+    }
+    broadcast("runtime", signal);
+  },
 });
+
+interactiveCommandRouter = new InteractiveCommandRouter({ runtime, admission: workspaceAdmission });
 
 const workflowRuntimeFactory: WorkflowRuntimeFactory = Object.freeze({
   create: (callbacks: Parameters<WorkflowRuntimeFactory["create"]>[0]) => new PiRpcRuntime({
@@ -218,6 +269,16 @@ function validatedCreateTask(value: unknown): CreateTaskInput {
     projectName: textValue(input.projectName, "projectName"),
     trusted: booleanValue(input.trusted, "trusted"),
     executionTarget: validatedExecutionTarget(input.executionTarget),
+    sourcePiSessionPath: input.sourcePiSessionPath === undefined ? undefined : textValue(input.sourcePiSessionPath, "sourcePiSessionPath"),
+    sourcePiSessionId: input.sourcePiSessionId === undefined ? undefined : textValue(input.sourcePiSessionId, "sourcePiSessionId"),
+  });
+}
+
+function validatedOpenTaskSession(value: unknown): OpenTaskSessionInput {
+  const input = objectValue(value, "打开任务会话参数");
+  return Object.freeze({
+    taskId: requiredString(input.taskId, "taskId"),
+    sessionPath: requiredString(input.sessionPath, "sessionPath"),
   });
 }
 
@@ -235,9 +296,9 @@ function validatedUpdateTask(value: unknown): UpdateTaskInput {
   });
 }
 
-function validatedManualStatus(value: unknown): ManualTaskStatus {
+function validatedManualStage(value: unknown): ManualTaskStage {
   if (value !== "planned" && value !== "blocked" && value !== "completed") {
-    throw new Error(`不支持的手动任务状态: ${String(value)}`);
+    throw new Error(`不支持的手动任务阶段: ${String(value)}`);
   }
   return value;
 }
@@ -247,6 +308,23 @@ function validatedGate(value: unknown): ResolveGateInput {
   if (input.decision !== "approve" && input.decision !== "reject") throw new Error("decision 必须是 approve 或 reject");
   return Object.freeze({
     taskId: requiredString(input.taskId, "taskId"),
+    decision: input.decision,
+    comment: textValue(input.comment, "comment"),
+  });
+}
+
+function validatedExecutionReview(value: unknown): ReviewExecutionInput {
+  const input = objectValue(value, "执行验收参数");
+  if (input.executionKind !== "workflow" && input.executionKind !== "agent-task") {
+    throw new Error(`不支持的 executionKind: ${String(input.executionKind)}`);
+  }
+  if (input.decision !== "accept" && input.decision !== "revision-requested" && input.decision !== "reject") {
+    throw new Error(`不支持的验收决定: ${String(input.decision)}`);
+  }
+  return Object.freeze({
+    taskId: requiredString(input.taskId, "taskId"),
+    executionKind: input.executionKind,
+    executionId: requiredString(input.executionId, "executionId"),
     decision: input.decision,
     comment: textValue(input.comment, "comment"),
   });
@@ -339,6 +417,7 @@ function validatedUpdateAutopilot(value: unknown): UpdateAutopilotInput {
 }
 
 async function createAutopilotForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  assertTaskCapability();
   if (!currentProject) throw new Error("尚未选择项目");
   const input = validatedCreateAutopilot(value);
   if (resolve(input.projectPath) !== currentProject.cwd) throw new Error("Autopilot 项目必须与当前主进程工作区一致");
@@ -349,11 +428,12 @@ async function createAutopilotForCurrentProject(value: unknown): Promise<BoardBo
     projectName: project.name,
     trusted: project.trusted,
   }));
-  await scheduleRunner.notify();
+  await notifyScheduleCapability();
   return bootstrap;
 }
 
 async function updateAutopilotForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  assertTaskCapability();
   if (!currentProject) throw new Error("尚未选择项目");
   const input = validatedUpdateAutopilot(value);
   if (resolve(input.projectPath) !== currentProject.cwd) throw new Error("Autopilot 项目必须与当前主进程工作区一致");
@@ -364,17 +444,19 @@ async function updateAutopilotForCurrentProject(value: unknown): Promise<BoardBo
     projectName: project.name,
     trusted: project.trusted,
   }));
-  await scheduleRunner.notify();
+  await notifyScheduleCapability();
   return bootstrap;
 }
 
 async function deleteAutopilot(autopilotId: string): Promise<BoardBootstrap> {
+  assertTaskCapability();
   const bootstrap = await autopilotService.delete(autopilotId);
-  await scheduleRunner.notify();
+  await notifyScheduleCapability();
   return bootstrap;
 }
 
 async function createBoardTaskForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  assertTaskCapability();
   if (!currentProject) throw new Error("尚未选择项目");
   const input = validatedCreateTask(value);
   if (resolve(input.projectPath) !== currentProject.cwd) {
@@ -390,6 +472,8 @@ async function createBoardTaskForCurrentProject(value: unknown): Promise<BoardBo
 }
 
 async function dispatchBoardTask(taskId: string): Promise<BoardBootstrap> {
+  assertTaskCapability();
+  assertPiExecutionCapability();
   const state = await boardStore.read();
   const task = state.tasks.find((candidate) => candidate.id === taskId);
   if (!task) throw new Error(`找不到任务: ${taskId}`);
@@ -405,6 +489,7 @@ async function dispatchBoardTask(taskId: string): Promise<BoardBootstrap> {
 }
 
 async function abortBoardTask(taskId: string): Promise<BoardBootstrap> {
+  assertTaskCapability();
   const state = await boardStore.read();
   const task = state.tasks.find((candidate) => candidate.id === taskId);
   if (!task) throw new Error(`找不到任务: ${taskId}`);
@@ -570,7 +655,7 @@ async function hydrate(): Promise<RuntimeBootstrap> {
     messages: messages as RuntimeBootstrap["messages"],
     models: Object.freeze(models),
     commands: Object.freeze(commands),
-    sessions: Object.freeze(sessions.map(mapSession)),
+    sessions: visibleInteractiveSessions(sessions.map(mapSession)),
     stats,
     entries: Object.freeze(entriesData.entries.map(mapSessionEntry)),
     tree: Object.freeze(
@@ -582,13 +667,21 @@ async function hydrate(): Promise<RuntimeBootstrap> {
 }
 
 async function initializeRuntime(): Promise<RuntimeBootstrap> {
-  if (!currentProject) {
-    const persisted = await stateStore.read();
-    const cwd = persisted.lastProject ?? (app.isPackaged ? app.getPath("documents") : process.cwd());
-    const remembered = persisted.recentProjects.find((project) => project.path === cwd);
-    currentProject = Object.freeze({ cwd, trusted: remembered?.trusted ?? false });
+  capabilityHealth.set("pi", "loading");
+  try {
+    if (!currentProject) {
+      const persisted = await stateStore.read();
+      const cwd = persisted.lastProject ?? (app.isPackaged ? app.getPath("documents") : process.cwd());
+      const remembered = persisted.recentProjects.find((project) => project.path === cwd);
+      currentProject = Object.freeze({ cwd, trusted: remembered?.trusted ?? false });
+    }
+    const bootstrap = await hydrate();
+    capabilityHealth.set("pi", "ready");
+    return bootstrap;
+  } catch (cause) {
+    capabilityHealth.set("pi", "error", errorMessage(cause));
+    throw cause;
   }
-  return hydrate();
 }
 
 async function chooseProject(): Promise<ProjectSelection | null> {
@@ -610,20 +703,186 @@ async function chooseProject(): Promise<ProjectSelection | null> {
 }
 
 async function openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap> {
+  capabilityHealth.set("pi", "loading");
+  try {
+    await runtime.stop();
+    interactiveCommandRouter?.release();
+    const resolvedPath = resolve(path);
+    currentProject = Object.freeze({ cwd: resolvedPath, trusted });
+    await runtime.start(currentProject);
+    await stateStore.recordProject(resolvedPath, trusted);
+    const bootstrap = await hydrate();
+    capabilityHealth.set("pi", "ready");
+    return bootstrap;
+  } catch (cause) {
+    capabilityHealth.set("pi", "error", errorMessage(cause));
+    throw cause;
+  }
+}
+
+function canonicalSessionPath(path: string): string {
   const resolvedPath = resolve(path);
-  currentProject = Object.freeze({ cwd: resolvedPath, trusted });
-  await runtime.start(currentProject);
-  await stateStore.recordProject(resolvedPath, trusted);
-  return hydrate();
+  return process.platform === "win32" ? resolvedPath.toLocaleLowerCase() : resolvedPath;
+}
+
+async function openTaskSession(value: unknown): Promise<RuntimeBootstrap> {
+  assertTaskCapability();
+  assertPiExecutionCapability();
+  const state = await boardStore.read();
+  const target = resolveTaskSessionTarget(state, validatedOpenTaskSession(value), canonicalSessionPath);
+  const session = await stat(target.sessionPath);
+  if (!session.isFile()) throw new Error(`任务 session 不是文件: ${target.sessionPath}`);
+  capabilityHealth.set("pi", "loading");
+  try {
+    await runtime.stop();
+    interactiveCommandRouter?.release();
+    currentProject = Object.freeze({ cwd: resolve(target.projectPath), trusted: target.trusted });
+    await runtime.start({ ...currentProject, sessionPath: target.sessionPath });
+    await stateStore.recordProject(currentProject.cwd, currentProject.trusted);
+    const bootstrap = await hydrate();
+    capabilityHealth.set("pi", "ready");
+    return bootstrap;
+  } catch (cause) {
+    capabilityHealth.set("pi", "error", errorMessage(cause));
+    throw cause;
+  }
+}
+
+async function refreshPiCapability(): Promise<RuntimeBootstrap> {
+  try {
+    const bootstrap = await hydrate();
+    capabilityHealth.set("pi", "ready");
+    return bootstrap;
+  } catch (cause) {
+    capabilityHealth.set("pi", "error", errorMessage(cause));
+    throw cause;
+  }
+}
+
+async function startScheduleCapability(): Promise<void> {
+  if (capabilityHealth.snapshot().task.state !== "ready") {
+    capabilityHealth.set("schedule", "error", "Task Control 未就绪，Schedule 无法启动");
+    return;
+  }
+  await capabilityHealth.run("schedule", () => scheduleRunner.start());
+}
+
+async function notifyScheduleCapability(): Promise<void> {
+  if (capabilityHealth.snapshot().schedule.state !== "ready") return;
+  try {
+    await scheduleRunner.notify();
+  } catch (cause) {
+    capabilityHealth.set("schedule", "error", errorMessage(cause));
+  }
+}
+
+async function startWebhookCapability(): Promise<void> {
+  if (capabilityHealth.snapshot().task.state !== "ready") {
+    capabilityHealth.set("webhook", "error", "Task Control 未就绪，Webhook 无法启动");
+    return;
+  }
+  await capabilityHealth.run("webhook", async () => { await webhookServer.start(); });
+}
+
+async function initializeTaskCapability(): Promise<void> {
+  capabilityHealth.set("task", "loading");
+  try {
+    boardStore = new BoardStore(join(app.getPath("userData"), "board", "board.json"));
+    await boardStore.initialize();
+    const emitSnapshot = (bootstrap: BoardBootstrap): void => broadcast("board", { type: "snapshot", bootstrap });
+    boardService = new BoardService({
+      repository: boardStore,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      emitChanged: emitSnapshot,
+    });
+    workflowOrchestrator = new WorkflowOrchestrator({
+      repository: boardStore,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      runtimeFactory: workflowRuntimeFactory,
+      emitBoardEvent: (event) => broadcast("board", event),
+      admission: workspaceAdmission,
+    });
+    agentTaskService = new AgentTaskService({
+      repository: boardStore,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      emitChanged: emitSnapshot,
+    });
+    executionReviewService = new ExecutionReviewService({
+      repository: boardStore,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      emitChanged: emitSnapshot,
+    });
+    squadService = new SquadService({
+      repository: boardStore,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      emitChanged: emitSnapshot,
+    });
+    autopilotService = new AutopilotService({
+      repository: boardStore,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      dispatchTask: dispatchBoardTask,
+      emitChanged: emitSnapshot,
+    });
+    scheduleRunner = new ScheduleRunner({
+      repository: boardStore,
+      autopilotService,
+      emitBoardEvent: (event) => broadcast("board", event),
+    });
+    webhookServer = new WebhookServer({
+      autopilotService,
+      emitBoardEvent: (event) => broadcast("board", event),
+      port: webhookPortFromEnvironment(process.env.STELLA_WEBHOOK_PORT),
+      maxBodyBytes: webhookMaxBytesFromEnvironment(process.env.STELLA_WEBHOOK_MAX_BYTES),
+    });
+    agentTaskRunner = new AgentTaskRunner({
+      service: agentTaskService,
+      runtimeFactory: agentTaskRuntimeFactory,
+      emitBoardEvent: (event) => broadcast("board", event),
+      admission: workspaceAdmission,
+    });
+    agentTaskRunner.start();
+    capabilityHealth.set("task", "ready");
+    await Promise.all([startScheduleCapability(), startWebhookCapability()]);
+  } catch (cause) {
+    const message = errorMessage(cause);
+    capabilityHealth.set("task", "error", message);
+    capabilityHealth.set("schedule", "error", `Task Control 初始化失败：${message}`);
+    capabilityHealth.set("webhook", "error", `Task Control 初始化失败：${message}`);
+  }
+}
+
+async function retryCapability(name: CapabilityName): Promise<CapabilityHealthSnapshot> {
+  if (name === "pi") {
+    try {
+      await initializeRuntime();
+    } catch {
+      // initializeRuntime 已把精确错误写入 Capability Health。
+    }
+  } else if (name === "task") {
+    await initializeTaskCapability();
+  } else if (name === "schedule") {
+    await startScheduleCapability();
+  } else {
+    await startWebhookCapability();
+  }
+  return capabilityHealth.snapshot();
 }
 
 function registerIpcHandlers(): void {
+  ipcMain.handle("stella:capabilities", () => capabilityHealth.snapshot());
+  ipcMain.handle("stella:capability:retry", (_event, name: unknown) => retryCapability(validatedCapabilityName(name)));
   ipcMain.handle("stella:initialize", () => initializeRuntime());
-  ipcMain.handle("stella:refresh", () => hydrate());
-  ipcMain.handle("stella:command", (_event, command: unknown) => runtime.send(validatedCommand(command)));
-  ipcMain.handle("stella:extension-response", (_event, response: unknown) =>
-    runtime.respondToExtension(validatedExtensionResponse(response)),
-  );
+  ipcMain.handle("stella:refresh", () => refreshPiCapability());
+  ipcMain.handle("stella:command", (_event, command: unknown) => {
+    assertPiExecutionCapability();
+    if (!currentProject) throw new Error("尚未选择项目");
+    if (!interactiveCommandRouter) throw new Error("Interactive command router 尚未初始化");
+    return interactiveCommandRouter.send(validatedCommand(command), currentProject.cwd);
+  });
+  ipcMain.handle("stella:extension-response", (_event, response: unknown) => {
+    assertPiExecutionCapability();
+    return runtime.respondToExtension(validatedExtensionResponse(response));
+  });
   ipcMain.handle("stella:choose-project", () => chooseProject());
   ipcMain.handle("stella:open-project", (_event, path: unknown, trusted: unknown) => {
     if (typeof trusted !== "boolean") throw new Error("项目 trusted 参数必须是布尔值");
@@ -650,30 +909,40 @@ function registerIpcHandlers(): void {
     clipboard.writeText(textValue(value, "待复制文本"));
   });
   ipcMain.handle("stella:board:initialize", async () => {
+    assertTaskCapability();
     const bootstrap = await boardService.bootstrap();
     webhookServer.emitStatus();
     return bootstrap;
   });
   ipcMain.handle("stella:board:create-task", (_event, input: unknown) => createBoardTaskForCurrentProject(input));
-  ipcMain.handle("stella:board:update-task", (_event, input: unknown) => boardService.updateTask(validatedUpdateTask(input)));
-  ipcMain.handle("stella:board:move-task", (_event, taskId: unknown, status: unknown) =>
-    boardService.moveTask(requiredString(taskId, "taskId"), validatedManualStatus(status)),
-  );
-  ipcMain.handle("stella:board:delete-task", (_event, taskId: unknown) =>
-    boardService.deleteTask(requiredString(taskId, "taskId")),
-  );
-  ipcMain.handle("stella:board:add-comment", (_event, input: unknown) =>
-    agentTaskService.addComment(validatedTaskComment(input)),
-  );
-  ipcMain.handle("stella:board:create-squad", (_event, input: unknown) =>
-    squadService.create(validatedCreateSquad(input)),
-  );
-  ipcMain.handle("stella:board:update-squad", (_event, input: unknown) =>
-    squadService.update(validatedUpdateSquad(input)),
-  );
-  ipcMain.handle("stella:board:delete-squad", (_event, squadId: unknown) =>
-    squadService.delete(requiredString(squadId, "squadId")),
-  );
+  ipcMain.handle("stella:board:update-task", (_event, input: unknown) => {
+    assertTaskCapability();
+    return boardService.updateTask(validatedUpdateTask(input));
+  });
+  ipcMain.handle("stella:board:move-task", (_event, taskId: unknown, status: unknown) => {
+    assertTaskCapability();
+    return boardService.moveTask(requiredString(taskId, "taskId"), validatedManualStage(status));
+  });
+  ipcMain.handle("stella:board:delete-task", (_event, taskId: unknown) => {
+    assertTaskCapability();
+    return boardService.deleteTask(requiredString(taskId, "taskId"));
+  });
+  ipcMain.handle("stella:board:add-comment", (_event, input: unknown) => {
+    assertTaskCapability();
+    return agentTaskService.addComment(validatedTaskComment(input));
+  });
+  ipcMain.handle("stella:board:create-squad", (_event, input: unknown) => {
+    assertTaskCapability();
+    return squadService.create(validatedCreateSquad(input));
+  });
+  ipcMain.handle("stella:board:update-squad", (_event, input: unknown) => {
+    assertTaskCapability();
+    return squadService.update(validatedUpdateSquad(input));
+  });
+  ipcMain.handle("stella:board:delete-squad", (_event, squadId: unknown) => {
+    assertTaskCapability();
+    return squadService.delete(requiredString(squadId, "squadId"));
+  });
   ipcMain.handle("stella:board:create-autopilot", (_event, input: unknown) =>
     createAutopilotForCurrentProject(input),
   );
@@ -683,18 +952,27 @@ function registerIpcHandlers(): void {
   ipcMain.handle("stella:board:delete-autopilot", (_event, autopilotId: unknown) =>
     deleteAutopilot(requiredString(autopilotId, "autopilotId")),
   );
-  ipcMain.handle("stella:board:trigger-autopilot", (_event, autopilotId: unknown) =>
-    autopilotService.trigger({ autopilotId: requiredString(autopilotId, "autopilotId"), triggerKind: "manual" }),
-  );
+  ipcMain.handle("stella:board:trigger-autopilot", (_event, autopilotId: unknown) => {
+    assertTaskCapability();
+    assertPiExecutionCapability();
+    return autopilotService.trigger({ autopilotId: requiredString(autopilotId, "autopilotId"), triggerKind: "manual" });
+  });
   ipcMain.handle("stella:board:dispatch-task", (_event, taskId: unknown) =>
     dispatchBoardTask(requiredString(taskId, "taskId")),
   );
-  ipcMain.handle("stella:board:resolve-gate", (_event, input: unknown) =>
-    workflowOrchestrator.resolveGate(validatedGate(input)),
-  );
+  ipcMain.handle("stella:board:resolve-gate", (_event, input: unknown) => {
+    assertTaskCapability();
+    assertPiExecutionCapability();
+    return workflowOrchestrator.resolveGate(validatedGate(input));
+  });
+  ipcMain.handle("stella:board:review-execution", (_event, input: unknown) => {
+    assertTaskCapability();
+    return executionReviewService.review(validatedExecutionReview(input));
+  });
   ipcMain.handle("stella:board:abort-task", (_event, taskId: unknown) =>
     abortBoardTask(requiredString(taskId, "taskId")),
   );
+  ipcMain.handle("stella:board:open-session", (_event, input: unknown) => openTaskSession(input));
   ipcMain.handle("stella:window-action", (_event, action: unknown) => {
     if (!mainWindow) return;
     if (action === "minimize") mainWindow.minimize();
@@ -754,62 +1032,14 @@ if (!singleInstanceLock) {
     mainWindow.focus();
   });
 
-  void app.whenReady().then(async () => {
-  stateStore = new StateStore(join(app.getPath("userData"), "stella-state.json"));
-  boardStore = new BoardStore(join(app.getPath("userData"), "board", "board.json"));
-  await boardStore.initialize();
-  const emitSnapshot = (bootstrap: BoardBootstrap): void => broadcast("board", { type: "snapshot", bootstrap });
-  boardService = new BoardService({
-    repository: boardStore,
-    catalog: BUILTIN_ORCHESTRATION_CATALOG,
-    emitChanged: emitSnapshot,
-  });
-  workflowOrchestrator = new WorkflowOrchestrator({
-    repository: boardStore,
-    catalog: BUILTIN_ORCHESTRATION_CATALOG,
-    runtimeFactory: workflowRuntimeFactory,
-    emitBoardEvent: (event) => broadcast("board", event),
-  });
-  agentTaskService = new AgentTaskService({
-    repository: boardStore,
-    catalog: BUILTIN_ORCHESTRATION_CATALOG,
-    emitChanged: emitSnapshot,
-  });
-  squadService = new SquadService({
-    repository: boardStore,
-    catalog: BUILTIN_ORCHESTRATION_CATALOG,
-    emitChanged: emitSnapshot,
-  });
-  autopilotService = new AutopilotService({
-    repository: boardStore,
-    catalog: BUILTIN_ORCHESTRATION_CATALOG,
-    dispatchTask: dispatchBoardTask,
-    emitChanged: emitSnapshot,
-  });
-  scheduleRunner = new ScheduleRunner({
-    repository: boardStore,
-    autopilotService,
-    emitBoardEvent: (event) => broadcast("board", event),
-  });
-  webhookServer = new WebhookServer({
-    autopilotService,
-    emitBoardEvent: (event) => broadcast("board", event),
-    port: webhookPortFromEnvironment(process.env.STELLA_WEBHOOK_PORT),
-    maxBodyBytes: webhookMaxBytesFromEnvironment(process.env.STELLA_WEBHOOK_MAX_BYTES),
-  });
-  agentTaskRunner = new AgentTaskRunner({
-    service: agentTaskService,
-    runtimeFactory: agentTaskRuntimeFactory,
-    emitBoardEvent: (event) => broadcast("board", event),
-  });
-  registerIpcHandlers();
-  createWindow();
-  agentTaskRunner.start();
-  await scheduleRunner.start();
-  await webhookServer.start();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  void app.whenReady().then(() => {
+    stateStore = new StateStore(join(app.getPath("userData"), "stella-state.json"));
+    registerIpcHandlers();
+    createWindow();
+    void initializeTaskCapability();
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);
     dialog.showErrorBox("Stella 启动失败", message);
@@ -830,10 +1060,14 @@ app.on("before-quit", (event) => {
   shutdownStarted = true;
   void Promise.all([runtime.stop(), workflowOrchestrator?.shutdown(), agentTaskRunner?.shutdown(), scheduleRunner?.stop(), webhookServer?.stop()])
     .then(() => {
+      interactiveCommandRouter?.release();
+      workspaceAdmission.shutdown();
       shutdownComplete = true;
       app.quit();
     })
     .catch((cause: unknown) => {
+      interactiveCommandRouter?.release();
+      workspaceAdmission.shutdown();
       const message = cause instanceof Error ? cause.stack ?? cause.message : String(cause);
       dialog.showErrorBox("Stella 关闭失败", message);
       shutdownComplete = true;

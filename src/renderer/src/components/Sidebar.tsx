@@ -12,12 +12,14 @@ import {
   Settings2,
   TerminalSquare,
 } from "lucide-react";
+import type { CapabilityHealthSnapshot, CapabilityName } from "@shared/capabilities";
 import type { RecentProject, RuntimeBootstrap, SessionSummary } from "@shared/contracts";
 import type { SkinPreference } from "../lib/skins";
 import { Brand } from "./Brand";
 
 interface SidebarProps {
-  readonly bootstrap: RuntimeBootstrap;
+  readonly bootstrap?: RuntimeBootstrap;
+  readonly capabilities?: CapabilityHealthSnapshot;
   readonly skin: SkinPreference;
   readonly open: boolean;
   readonly activeView: WorkspaceView;
@@ -35,6 +37,13 @@ interface SidebarProps {
 }
 
 export type WorkspaceView = "chat" | "kanban";
+
+const CAPABILITY_LABEL: Readonly<Record<CapabilityName, string>> = Object.freeze({
+  pi: "Pi",
+  task: "Task",
+  schedule: "Schedule",
+  webhook: "Webhook",
+});
 
 function relativeGroup(dateString: string): "今天" | "过去 7 天" | "更早" {
   const now = new Date();
@@ -86,6 +95,7 @@ function SessionGroup({
 
 export function Sidebar({
   bootstrap,
+  capabilities,
   skin,
   open,
   activeView,
@@ -104,7 +114,7 @@ export function Sidebar({
   const [query, setQuery] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const groups = useMemo(() => {
-    const filtered = bootstrap.sessions.filter((session) =>
+    const filtered = (bootstrap?.sessions ?? []).filter((session) =>
       `${sessionTitle(session)} ${session.firstMessage}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
     );
     return {
@@ -112,7 +122,10 @@ export function Sidebar({
       "过去 7 天": filtered.filter((session) => relativeGroup(session.modified) === "过去 7 天"),
       更早: filtered.filter((session) => relativeGroup(session.modified) === "更早"),
     };
-  }, [bootstrap.sessions, query]);
+  }, [bootstrap?.sessions, query]);
+  const taskReady = capabilities?.task.state === "ready";
+  const piReady = capabilities?.pi.state === "ready" && Boolean(bootstrap);
+  const primaryActionDisabled = activeView === "kanban" ? !taskReady || !bootstrap : !piReady;
 
   return (
     <>
@@ -124,7 +137,7 @@ export function Sidebar({
           </button>
         </div>
 
-        <button type="button" className="new-session-button" onClick={activeView === "kanban" ? onNewTask : onNewSession}>
+        <button type="button" className="new-session-button" disabled={primaryActionDisabled} onClick={activeView === "kanban" ? onNewTask : onNewSession}>
           <CirclePlus size={18} />
           <span>{activeView === "kanban" ? "新建看板任务" : "新建会话"}</span>
           <kbd>Ctrl N</kbd>
@@ -144,11 +157,11 @@ export function Sidebar({
             <span>搜索与命令</span>
             <kbd>Ctrl K</kbd>
           </button>
-          <button type="button" onClick={onOpenTerminal}>
+          <button type="button" onClick={onOpenTerminal} disabled={!piReady}>
             <TerminalSquare size={16} />
             <span>运行命令</span>
           </button>
-          <button type="button" onClick={onOpenInspector}>
+          <button type="button" onClick={onOpenInspector} disabled={!piReady}>
             <GitFork size={16} />
             <span>会话图谱</span>
           </button>
@@ -164,14 +177,14 @@ export function Sidebar({
             <span className="project-switcher__icon"><Folder size={15} /></span>
             <span className="project-switcher__copy">
               <small>当前项目</small>
-              <strong>{bootstrap.project.name}</strong>
+              <strong>{bootstrap?.project.name ?? "未连接 Pi"}</strong>
             </span>
             <ChevronDown size={15} />
           </button>
           {projectMenuOpen && (
             <div className="project-menu popover-surface">
               <p className="popover-label">最近项目</p>
-              {bootstrap.recentProjects.map((project) => (
+              {(bootstrap?.recentProjects ?? []).map((project) => (
                 <button
                   type="button"
                   key={project.path}
@@ -184,7 +197,7 @@ export function Sidebar({
                   <span><strong>{project.path.split(/[\\/]/).at(-1)}</strong><small>{project.path}</small></span>
                 </button>
               ))}
-              {bootstrap.recentProjects.length > 0 && <div className="popover-divider" />}
+              {(bootstrap?.recentProjects.length ?? 0) > 0 && <div className="popover-divider" />}
               <button
                 type="button"
                 onClick={() => {
@@ -199,24 +212,33 @@ export function Sidebar({
           )}
         </div>
 
-        <div className="session-search">
-          <Search size={14} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选会话" />
-          {query && <button type="button" onClick={() => setQuery("")}>清除</button>}
-        </div>
+        {bootstrap ? <>
+          <div className="session-search">
+            <Search size={14} />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选会话" />
+            {query && <button type="button" onClick={() => setQuery("")}>清除</button>}
+          </div>
 
-        <div className="session-list" aria-label="历史会话">
-          <SessionGroup label="今天" sessions={groups["今天"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
-          <SessionGroup label="过去 7 天" sessions={groups["过去 7 天"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
-          <SessionGroup label="更早" sessions={groups["更早"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
-          {bootstrap.sessions.length === 0 && (
-            <div className="sidebar-empty"><Command size={19} /><p>这个项目还没有会话。</p></div>
-          )}
-        </div>
+          <div className="session-list" aria-label="历史会话">
+            <SessionGroup label="今天" sessions={groups["今天"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
+            <SessionGroup label="过去 7 天" sessions={groups["过去 7 天"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
+            <SessionGroup label="更早" sessions={groups["更早"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
+            {bootstrap.sessions.length === 0 && (
+              <div className="sidebar-empty"><Command size={19} /><p>这个项目还没有会话。</p></div>
+            )}
+          </div>
+        </> : (
+          <div className="sidebar-empty sidebar-empty--capability"><Command size={19} /><p>Pi 会话暂不可用。任务看板保持独立运行。</p></div>
+        )}
 
         <div className="sidebar__footer">
-          <button type="button" onClick={onOpenSettings}><Settings2 size={16} /><span>偏好设置</span></button>
-          <span className="runtime-dot" title="Pi RPC 已连接" />
+          <button type="button" onClick={onOpenSettings} disabled={!bootstrap}><Settings2 size={16} /><span>偏好设置</span></button>
+          <div className="capability-ledger" aria-label="能力状态">
+            {(Object.keys(CAPABILITY_LABEL) as CapabilityName[]).map((name) => {
+              const health = capabilities?.[name];
+              return <span key={name} className={`capability-dot capability-dot--${health?.state ?? "loading"}`} title={`${CAPABILITY_LABEL[name]} · ${health?.state ?? "loading"}${health?.error ? ` · ${health.error}` : ""}`} />;
+            })}
+          </div>
         </div>
       </aside>
       {open && <button type="button" className="sidebar-scrim" aria-label="关闭侧栏" onClick={onClose} />}

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BoardRepository } from "./board-repository";
-import { parseAgentMentions } from "../shared/agent-mentions";
+import { availableMentionAgentsForTask, parseAgentMentions } from "../shared/agent-mentions";
 import {
   isTerminalAgentTaskStatus,
   type AgentDefinition,
@@ -73,16 +73,16 @@ export class AgentTaskService {
     const now = this.#now();
     return this.#commit((current) => {
       const task = this.#task(current, input.taskId);
-      const availableAgents = this.#availableMentionAgents(current, task);
+      const availableAgents = availableMentionAgentsForTask(task, this.#catalog, current.squads);
       const mentions = parseAgentMentions(body, availableAgents).agents;
       if (mentions.length > 0 && (task.activeRunId || task.activeAgentTaskId)) {
         throw new Error("任务正在执行；请先中止或等待完成后再使用 @mention 分发");
       }
-      if (mentions.length > 0 && task.status === "completed") {
+      if (mentions.length > 0 && task.stage === "completed") {
         throw new Error("已完成任务需先移回待规划列才能使用 @mention 分发");
       }
 
-      const comment: TaskComment = Object.freeze({ id: this.#id(), taskId: task.id, author: "user", body, createdAt: now });
+      const comment: TaskComment = Object.freeze({ id: this.#id(), taskId: task.id, author: "user", messageKind: "comment", body, createdAt: now });
       const activities: TaskActivity[] = [this.#activity(task.id, "comment", "用户添加了评论", body, now)];
       if (mentions.length === 0) {
         return { ...current, comments: [...current.comments, comment], activities: [...current.activities, ...activities] };
@@ -99,6 +99,7 @@ export class AgentTaskService {
         agentSnapshot: cloneAgent(rootAgent),
         kind: mentions.length > 1 ? "mention-root" : "direct",
         status: "queued",
+        acceptance: "not-ready",
         prompt: this.#promptFor(task, rootAgent, comments),
         squadId,
         createdAt: now,
@@ -110,13 +111,14 @@ export class AgentTaskService {
         agentSnapshot: cloneAgent(agent),
         kind: "delegated" as const,
         status: "queued" as const,
+        acceptance: "not-ready" as const,
         prompt: this.#mentionPrompt(task, agent, body),
         parentAgentTaskId: rootId,
         squadId,
         createdAt: now,
         updatedAt: now,
       }));
-      const nextTask: KanbanTask = Object.freeze({ ...task, status: "queued", activeAgentTaskId: rootId, blockedReason: undefined, updatedAt: now });
+      const nextTask: KanbanTask = Object.freeze({ ...task, activeAgentTaskId: rootId, updatedAt: now });
       activities.push(this.#activity(task.id, "dispatch", `评论已分发给 ${mentions.map((agent) => agent.name).join("、")}`, body, now, rootId));
       return {
         ...current,
@@ -164,34 +166,88 @@ export class AgentTaskService {
     });
   }
 
-  async claimNext(): Promise<ClaimedAgentTask | undefined> {
+  async nextQueued(): Promise<ClaimedAgentTask | undefined> {
+    const current = await this.#repository.read();
+    if (current.agentTasks.some((agentTask) => agentTask.status === "running")) return undefined;
+    const next = [...current.agentTasks]
+      .filter((agentTask) => agentTask.status === "queued")
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))[0];
+    if (!next) return undefined;
+    const task = this.#task(current, next.taskId);
+    const rootId = this.#rootAgentTaskId(current, next);
+    if (task.activeAgentTaskId !== rootId) throw new Error(`AgentTask ${next.id} 与任务的 activeAgentTaskId 不一致`);
+    return Object.freeze({ task, agentTask: next });
+  }
+
+  async claim(agentTaskId: string): Promise<ClaimedAgentTask | undefined> {
     const runtimeToken = this.#id();
     const now = this.#now();
-    let claimedId: string | undefined;
+    let claimed = false;
     const board = await this.#repository.update((current) => {
       if (current.agentTasks.some((agentTask) => agentTask.status === "running")) return current;
-      const next = [...current.agentTasks]
-        .filter((agentTask) => agentTask.status === "queued")
-        .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))[0];
-      if (!next) return current;
+      const next = current.agentTasks.find((agentTask) => agentTask.id === agentTaskId);
+      if (!next || next.status !== "queued") return current;
       const task = this.#task(current, next.taskId);
       const rootId = this.#rootAgentTaskId(current, next);
       if (task.activeAgentTaskId !== rootId) throw new Error(`AgentTask ${next.id} 与任务的 activeAgentTaskId 不一致`);
-      claimedId = next.id;
-      const claimed: AgentTask = Object.freeze({ ...next, status: "running", runtimeToken, startedAt: now, updatedAt: now });
+      claimed = true;
+      const running: AgentTask = Object.freeze({ ...next, status: "running", runtimeToken, startedAt: now, updatedAt: now });
       return {
         ...current,
-        tasks: current.tasks.map((candidate) => candidate.id === task.id ? Object.freeze({ ...task, status: "running" as const, updatedAt: now }) : candidate),
-        agentTasks: current.agentTasks.map((candidate) => candidate.id === next.id ? claimed : candidate),
+        agentTasks: current.agentTasks.map((candidate) => candidate.id === next.id ? running : candidate),
         activities: [...current.activities, this.#activity(task.id, "agent", `${next.agentSnapshot.name}开始执行`, next.kind, now, next.id)],
       };
     });
-    if (!claimedId) return undefined;
+    if (!claimed) return undefined;
     const bootstrap = Object.freeze({ board, catalog: this.#catalog });
     this.#emitChanged(bootstrap);
-    const agentTask = board.agentTasks.find((candidate) => candidate.id === claimedId);
-    if (!agentTask) throw new Error(`认领后找不到 AgentTask: ${claimedId}`);
+    const agentTask = board.agentTasks.find((candidate) => candidate.id === agentTaskId);
+    if (!agentTask) throw new Error(`认领后找不到 AgentTask: ${agentTaskId}`);
     return Object.freeze({ task: this.#task(board, agentTask.taskId), agentTask });
+  }
+
+  async recordWorkspaceWait(agentTaskId: string, blockingOwner: string): Promise<BoardBootstrap> {
+    const now = this.#now();
+    return this.#commit((current) => {
+      const agentTask = this.#agentTask(current, agentTaskId);
+      if (agentTask.status !== "queued") return current;
+      return {
+        ...current,
+        activities: [...current.activities, this.#activity(
+          agentTask.taskId,
+          "status",
+          `${agentTask.agentSnapshot.name}等待项目写入席位`,
+          `当前占用者：${blockingOwner}`,
+          now,
+          agentTask.id,
+        )],
+      };
+    });
+  }
+
+  async rejectQueued(agentTaskId: string, cause: unknown): Promise<BoardBootstrap> {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const now = this.#now();
+    return this.#commit((current) => {
+      const agentTask = this.#agentTask(current, agentTaskId);
+      if (agentTask.status !== "queued") throw new Error(`AgentTask ${agentTaskId} 不在 queued 状态`);
+      const task = this.#task(current, agentTask.taskId);
+      const rootId = this.#rootAgentTaskId(current, agentTask);
+      const groupIds = this.#agentTaskGroupIds(current, rootId);
+      return {
+        ...current,
+        tasks: current.tasks.map((candidate) => candidate.id === task.id
+          ? Object.freeze({ ...task, activeAgentTaskId: undefined, updatedAt: now })
+          : candidate),
+        agentTasks: current.agentTasks.map((candidate) => {
+          if (candidate.id === agentTask.id) return Object.freeze({ ...candidate, status: "failed" as const, error: message, updatedAt: now, completedAt: now });
+          if (!groupIds.has(candidate.id) || isTerminalAgentTaskStatus(candidate.status)) return candidate;
+          if (candidate.id === rootId) return Object.freeze({ ...candidate, status: "failed" as const, error: `子任务无法启动：${message}`, updatedAt: now, completedAt: now });
+          return Object.freeze({ ...candidate, status: "cancelled" as const, error: "同组 AgentTask 无法安全启动", updatedAt: now, completedAt: now });
+        }),
+        activities: [...current.activities, this.#activity(task.id, "error", `${agentTask.agentSnapshot.name}未通过启动前权限验证`, message, now, agentTask.id)],
+      };
+    });
   }
 
   async reconcileWaitingParents(): Promise<BoardBootstrap | undefined> {
@@ -218,9 +274,7 @@ export class AgentTaskService {
         tasks: state.tasks.map((task) => task.activeAgentTaskId && brokenIds.has(task.activeAgentTaskId)
           ? Object.freeze({
               ...task,
-              status: "failed" as const,
               activeAgentTaskId: undefined,
-              blockedReason: "子 AgentTask 未成功完成",
               updatedAt: now,
             })
           : task),
@@ -254,7 +308,8 @@ export class AgentTaskService {
         updatedAt: now,
       });
       const comment: TaskComment = Object.freeze({
-        id: this.#id(), taskId: task.id, author: "agent", authorAgentId: agentTask.agentSnapshot.id, body: output, createdAt: now,
+        id: this.#id(), taskId: task.id, author: "agent", authorAgentId: agentTask.agentSnapshot.id,
+        messageKind: "execution-report", agentTaskId: agentTask.id, body: output, createdAt: now,
       });
       const baseActivities = [...current.activities, this.#activity(task.id, "artifact", `${agentTask.agentSnapshot.name}已产出结果`, result.sessionPath, now, agentTask.id)];
 
@@ -269,6 +324,7 @@ export class AgentTaskService {
             agentSnapshot: cloneAgent(agent),
             kind: "delegated" as const,
             status: "queued" as const,
+            acceptance: "not-ready" as const,
             prompt: this.#delegatedPrompt(task, squad, agent, output),
             parentAgentTaskId: agentTask.id,
             squadId: squad.id,
@@ -278,7 +334,6 @@ export class AgentTaskService {
           const waitingLeader: AgentTask = Object.freeze({ ...agentTask, ...resultFields, status: "waiting_children" });
           return {
             ...current,
-            tasks: current.tasks.map((candidate) => candidate.id === task.id ? Object.freeze({ ...task, status: "queued" as const, updatedAt: now }) : candidate),
             agentTasks: [...current.agentTasks.map((candidate) => candidate.id === agentTask.id ? waitingLeader : candidate), ...children],
             comments: [...current.comments, comment],
             activities: [...baseActivities, this.#activity(task.id, "dispatch", `Leader 委派给 ${delegatedAgents.map((agent) => agent.name).join("、")}`, output, now, agentTask.id)],
@@ -292,42 +347,45 @@ export class AgentTaskService {
         const waitingRoot: AgentTask = Object.freeze({ ...agentTask, ...resultFields, status: "waiting_children" });
         return {
           ...current,
-          tasks: current.tasks.map((candidate) => candidate.id === task.id ? Object.freeze({ ...task, status: "queued" as const, updatedAt: now }) : candidate),
           agentTasks: current.agentTasks.map((candidate) => candidate.id === agentTask.id ? waitingRoot : candidate),
           comments: [...current.comments, comment],
           activities: baseActivities,
         };
       }
 
-      const succeeded: AgentTask = Object.freeze({ ...agentTask, ...resultFields, status: "succeeded", completedAt: now });
+      const reported: AgentTask = Object.freeze({
+        ...agentTask,
+        ...resultFields,
+        status: "reported",
+        acceptance: agentTask.parentAgentTaskId ? "not-ready" : "pending",
+        completedAt: now,
+      });
       if (agentTask.kind === "delegated") {
         const parent = this.#agentTask(current, agentTask.parentAgentTaskId ?? "");
         if (parent.status !== "waiting_children") throw new Error(`父 AgentTask ${parent.id} 未在等待子任务`);
         const children = current.agentTasks
           .filter((candidate) => candidate.parentAgentTaskId === parent.id)
-          .map((candidate) => candidate.id === agentTask.id ? succeeded : candidate);
-        const allSucceeded = children.every((candidate) => candidate.status === "succeeded");
-        const completedParent: AgentTask = allSucceeded
-          ? Object.freeze({ ...parent, status: "succeeded", updatedAt: now, completedAt: now })
+          .map((candidate) => candidate.id === agentTask.id ? reported : candidate);
+        const allReported = children.every((candidate) => candidate.status === "reported");
+        const completedParent: AgentTask = allReported
+          ? Object.freeze({ ...parent, status: "reported", acceptance: "pending", updatedAt: now, completedAt: now })
           : parent;
         return {
           ...current,
           tasks: current.tasks.map((candidate) => candidate.id === task.id
             ? Object.freeze({
                 ...task,
-                status: allSucceeded ? "review" as const : "queued" as const,
-                activeAgentTaskId: allSucceeded ? undefined : task.activeAgentTaskId,
-                blockedReason: undefined,
-                updatedAt: now,
+                activeAgentTaskId: allReported ? undefined : task.activeAgentTaskId,
+                updatedAt: allReported ? now : task.updatedAt,
               })
             : candidate),
           agentTasks: current.agentTasks.map((candidate) => {
-            if (candidate.id === agentTask.id) return succeeded;
+            if (candidate.id === agentTask.id) return reported;
             if (candidate.id === parent.id) return completedParent;
             return candidate;
           }),
           comments: [...current.comments, comment],
-          activities: allSucceeded
+          activities: allReported
             ? [...baseActivities, this.#activity(task.id, "status", "所有 Squad/mention 子任务已完成", undefined, now, parent.id)]
             : baseActivities,
         };
@@ -336,9 +394,9 @@ export class AgentTaskService {
       return {
         ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...task, status: "review" as const, activeAgentTaskId: undefined, blockedReason: undefined, updatedAt: now })
+          ? Object.freeze({ ...task, activeAgentTaskId: undefined, updatedAt: now })
           : candidate),
-        agentTasks: current.agentTasks.map((candidate) => candidate.id === agentTask.id ? succeeded : candidate),
+        agentTasks: current.agentTasks.map((candidate) => candidate.id === agentTask.id ? reported : candidate),
         comments: [...current.comments, comment],
         activities: baseActivities,
       };
@@ -356,7 +414,7 @@ export class AgentTaskService {
       return {
         ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...task, status: "failed" as const, activeAgentTaskId: undefined, blockedReason: message, updatedAt: now })
+          ? Object.freeze({ ...task, activeAgentTaskId: undefined, updatedAt: now })
           : candidate),
         agentTasks: current.agentTasks.map((candidate) => {
           if (candidate.id === agentTask.id) return Object.freeze({ ...candidate, status: "failed" as const, runtimeToken: undefined, error: message, updatedAt: now, completedAt: now });
@@ -387,9 +445,7 @@ export class AgentTaskService {
         tasks: current.tasks.map((candidate) => candidate.id === task.id
           ? Object.freeze({
               ...task,
-              status: running ? "interrupted" as const : "planned" as const,
               activeAgentTaskId: undefined,
-              blockedReason: running ? "用户中止 Agent 执行" : undefined,
               updatedAt: now,
             })
           : candidate),
@@ -421,7 +477,7 @@ export class AgentTaskService {
       return {
         ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...task, status: "interrupted" as const, activeAgentTaskId: undefined, blockedReason: reason, updatedAt: now })
+          ? Object.freeze({ ...task, activeAgentTaskId: undefined, updatedAt: now })
           : candidate),
         agentTasks: current.agentTasks.map((candidate) => {
           if (!groupIds.has(candidate.id) || isTerminalAgentTaskStatus(candidate.status)) return candidate;
@@ -457,7 +513,7 @@ export class AgentTaskService {
   #dispatchableTask(state: BoardState, taskId: string): KanbanTask {
     const task = this.#task(state, taskId);
     if (task.activeRunId || task.activeAgentTaskId) throw new Error("任务已有正在进行的执行");
-    if (task.status === "completed") throw new Error("已完成任务需先移回待规划列才能重新分发");
+    if (task.stage === "completed") throw new Error("已完成任务需先移回待规划列才能重新分发");
     return task;
   }
 
@@ -470,7 +526,7 @@ export class AgentTaskService {
     squadId?: string,
   ): AgentTask {
     return Object.freeze({
-      id: this.#id(), taskId: task.id, agentSnapshot: cloneAgent(agent), kind, status: "queued", prompt, squadId, createdAt: now, updatedAt: now,
+      id: this.#id(), taskId: task.id, agentSnapshot: cloneAgent(agent), kind, status: "queued", acceptance: "not-ready", prompt, squadId, createdAt: now, updatedAt: now,
     });
   }
 
@@ -482,7 +538,7 @@ export class AgentTaskService {
     detail: string,
     now: string,
   ): BoardState {
-    const nextTask: KanbanTask = Object.freeze({ ...task, status: "queued", activeAgentTaskId: agentTask.id, blockedReason: undefined, updatedAt: now });
+    const nextTask: KanbanTask = Object.freeze({ ...task, activeAgentTaskId: agentTask.id, updatedAt: now });
     return {
       ...state,
       tasks: state.tasks.map((candidate) => candidate.id === task.id ? nextTask : candidate),
@@ -521,12 +577,6 @@ export class AgentTaskService {
       }
     }
     return ids;
-  }
-
-  #availableMentionAgents(state: BoardState, task: KanbanTask): readonly AgentDefinition[] {
-    if (task.executionTarget.kind !== "squad") return this.#catalog.agents;
-    const squad = this.#squad(state, task.executionTarget.squadId);
-    return Object.freeze([this.#agent(squad.leaderAgentId), ...squad.memberAgentIds.map((agentId) => this.#agent(agentId))]);
   }
 
   #task(state: BoardState, taskId: string): KanbanTask {

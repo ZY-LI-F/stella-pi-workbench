@@ -6,6 +6,7 @@ import { BUILTIN_ORCHESTRATION_CATALOG } from "../../src/shared/orchestration-ca
 import { BoardService } from "../../src/main/board-service";
 import type { BoardRepository } from "../../src/main/board-repository";
 import { WorkflowOrchestrator, type WorkflowAgentRuntime, type WorkflowRuntimeFactory } from "../../src/main/workflow-orchestrator";
+import { WorkspaceAdmission } from "../../src/main/workspace-admission";
 
 class MemoryRepository implements BoardRepository {
   state: BoardState = EMPTY_BOARD_STATE;
@@ -59,6 +60,7 @@ function idFactory(): () => string {
 async function setup(runtimeFactory = new FakeRuntimeFactory()) {
   const repository = new MemoryRepository();
   const events: BoardBridgeEvent[] = [];
+  const admission = new WorkspaceAdmission({ canonicalize: async (path) => path.toLocaleLowerCase("en-US") });
   const id = idFactory();
   const service = new BoardService({ repository, catalog: BUILTIN_ORCHESTRATION_CATALOG, emitChanged: () => undefined, id, now: () => "2026-07-17T00:00:00.000Z" });
   await service.createTask({
@@ -73,10 +75,11 @@ async function setup(runtimeFactory = new FakeRuntimeFactory()) {
     catalog: BUILTIN_ORCHESTRATION_CATALOG,
     runtimeFactory,
     emitBoardEvent: (event) => events.push(event),
+    admission,
     id,
     now: () => "2026-07-17T00:00:00.000Z",
   });
-  return { repository, runtimeFactory, events, orchestrator, taskId };
+  return { repository, runtimeFactory, events, orchestrator, admission, taskId };
 }
 
 describe("WorkflowOrchestrator", () => {
@@ -91,7 +94,8 @@ describe("WorkflowOrchestrator", () => {
     expect(repository.state.runs[0]?.steps[0]?.status).toBe("succeeded");
 
     runtimeFactory.runtimes[1]?.settle();
-    await vi.waitFor(() => expect(repository.state.tasks[0]?.status).toBe("review"));
+    await vi.waitFor(() => expect(repository.state.runs[0]?.status).toBe("review"));
+    expect(repository.state.tasks[0]?.stage).toBe("planned");
     expect(repository.state.runs[0]?.currentStepId).toBe("approve-plan");
 
     await orchestrator.resolveGate({ taskId, decision: "approve", comment: "方案通过" });
@@ -106,7 +110,7 @@ describe("WorkflowOrchestrator", () => {
     await orchestrator.dispatch(taskId);
     await vi.waitFor(() => expect(runtimeFactory.runtimes).toHaveLength(1));
     await orchestrator.abort(taskId);
-    expect(repository.state.tasks[0]?.status).toBe("interrupted");
+    expect(repository.state.tasks[0]?.stage).toBe("planned");
     expect(repository.state.tasks[0]?.activeRunId).toBeUndefined();
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(repository.state.activities.at(-1)?.summary).toContain("中止");
@@ -124,7 +128,7 @@ describe("WorkflowOrchestrator", () => {
     await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.stop).toHaveBeenCalledTimes(2));
     expect(runtimeFactory.runtimes[0]?.running).toBe(false);
     expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(false);
-    expect(repository.state.tasks[0]?.status).toBe("interrupted");
+    expect(repository.state.tasks[0]?.stage).toBe("planned");
   });
 
   it("keeps abort terminal when a late Agent settlement arrives", async () => {
@@ -135,7 +139,7 @@ describe("WorkflowOrchestrator", () => {
     await orchestrator.abort(taskId);
     runtime?.settle();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(repository.state.tasks[0]?.status).toBe("interrupted");
+    expect(repository.state.tasks[0]?.stage).toBe("planned");
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(repository.state.runs[0]?.steps[0]?.artifact).toBeUndefined();
   });
@@ -145,7 +149,7 @@ describe("WorkflowOrchestrator", () => {
     await orchestrator.dispatch(taskId);
     await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(true));
     await orchestrator.shutdown();
-    expect(repository.state.tasks[0]?.status).toBe("interrupted");
+    expect(repository.state.tasks[0]?.stage).toBe("planned");
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(runtimeFactory.runtimes[0]?.stop).toHaveBeenCalled();
   });

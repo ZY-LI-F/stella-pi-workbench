@@ -4,6 +4,8 @@
 > 日期：2026-07-17  
 > 目标：先交付固定 Kanban + 本地持久化 AgentTaskQueue + Squad 动态委派 + Manual / Schedule / Webhook Autopilot + 内置 Pi RPC Runner。
 
+> 兼容性不变量：本增量不得替换或裁剪现有 Pi 工作台。用户无需创建 Task 即可继续使用完整的交互式 Pi 页面、会话和命令；后台 AgentTask 使用隔离的 Pi Runtime 实例。详见 ADR 0003。
+
 本 Spec 是 `stella-v2-simple-technical-spec.md` 的可独立交付增量。对于该旧文档中把动态 Squad、计划和 Webhook列为“暂不实现”的条目，以本 Spec 为准；Project、可配置列和可视化 DAG 仍不在本次实现范围。
 
 ## Problem Statement
@@ -24,6 +26,12 @@
 6. 应用运行期间的 `ScheduleRunner` 与仅监听 `127.0.0.1` 的 Webhook Server。
 
 固定 Workflow 的已有能力保持不变。任务新增执行目标，用户可选择固定 Workflow、单个 Agent 或一个 Squad；三种分发入口共享同一张看板和任务详情。
+
+## Pi Workspace Compatibility Boundary
+
+自动化能力是 Pi 工作台的并列增量，而不是新的强制入口。普通 Pi prompt、会话切换、模型/思考设置、Slash Command、Extension UI、steer/follow-up、压缩、分叉、克隆、导出、工具轨迹和本地终端继续直接使用交互式 Pi Runtime，不创建或修改 Task/AgentTask。只有用户显式选择“固化为任务”、在正式 Task 中分发，或从任务界面打开某次执行时，两个平面才通过稳定 ID 建立可见关联。
+
+交互式 Pi Runtime 与 AgentTaskRunner 创建的 Runtime 必须拥有独立会话和事件流。自动化状态、Worker 输出或失败不得写入当前 Pi 会话；任务控制台初始化失败也不得被伪装成 Pi 成功，且在交互式 Runtime 可启动时必须保留 Pi 工作台入口。
 
 ## User Stories
 
@@ -51,6 +59,9 @@
 22. As a Stella user, I want malformed JSON, an unknown token, an oversized body, or a failed action to return an explicit HTTP error and write an audit record where applicable, so that integration failures are debuggable.
 23. As a recipient of the installer, I want the Runner to launch bundled Pi from Stella's own installation, so that my local `pi` installation path is irrelevant.
 24. As a user of Stella, 晨曦, or 定阳, I want queue, Squad, Autopilot, Webhook, comments, empty states, errors, focus states, and narrow layouts to be fully styled, so that automation never looks like a bolted-on admin panel.
+25. As a Pi user, I want every existing Pi workspace page and capability to remain usable without a Task, so that automation is optional.
+26. As a Pi user, I want my interactive session to be isolated from Workflow and AgentTask runtimes, so that background work cannot mutate my conversation.
+27. As a Pi user, I want converting chat context into a formal Task to require an explicit action, so that ordinary exploration never creates Kanban records.
 
 ## Domain Model
 
@@ -167,6 +178,9 @@ Run records snapshot the selected Agent definition before execution. Updating th
 12. Preserve full Board Snapshot events after each committed change. Live Agent events include `agentTaskId` when emitted by the queue Runner.
 13. The automation UI is embedded in the existing Kanban workspace: task detail gains discussion and execution tracks; a compact Automation Studio manages Squads and Autopilots. No second application shell is introduced.
 14. New UI uses existing semantic skin tokens. Stella uses deep-space cyan/violet pulses, 晨曦 uses paper/sunrise ribbons, 定阳 uses ink/vermilion seals; all keep their existing signatures and typography.
+15. Keep the existing Pi Workspace route and components as a first-class sibling of Kanban. Task features may link to Pi but must not replace its Composer, Conversation, Inspector, Settings, Extension UI, Command Palette or Terminal surfaces.
+16. Keep one long-lived interactive `PiRpcRuntime` and create separate Runtime instances for Workflow/AgentTask execution. Events are routed by owning surface and stable execution ID; no background event is injected into the interactive reducer.
+17. Initialize and report Task Control independently enough that a board-specific validation or orchestration failure cannot silently change Pi command behavior or remove the Pi Workspace entry when interactive Pi can start.
 
 ## Testing Decisions
 
@@ -188,6 +202,10 @@ Required tests:
 12. Validate main-process IPC inputs for all commands.
 13. Render execution target selection, comments, queue tracks, Squad forms, Autopilot forms/runs and webhook URL in all three skins.
 14. Run `npm run check`, production build, and packaged Windows end-to-end boot plus automation bridge smoke tests.
+15. Exercise the complete Pi Workspace without creating any Task and prove no Board or AgentTask state changes.
+16. Prove new/switch/rename/clone/fork sessions, model/thinking changes, prompt images, Slash Commands, Extension UI, steer/follow-up, abort/retry, compaction, export and terminal commands retain their existing RPC behavior.
+17. Prove an AgentTask/Workflow event cannot alter the active interactive Pi session, message list, queue, tree or extension state.
+18. Prove a Task Control initialization error is explicit and does not remove the Pi Workspace entry when the interactive Runtime starts successfully.
 
 ## Out of Scope
 

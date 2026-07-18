@@ -13,10 +13,10 @@ import {
 } from "lucide-react";
 import type { ProjectMeta, StellaDesktopApi } from "@shared/contracts";
 import {
-  boardLaneForStatus,
+  boardLaneForStage,
   type BoardLane,
   type KanbanTask,
-  type ManualTaskStatus,
+  type ManualTaskStage,
   type OrchestrationCatalog,
   type Squad,
   type WorkflowDefinition,
@@ -28,12 +28,19 @@ import { LANE_CONFIG } from "./kanban-format";
 import { TaskCard } from "./TaskCard";
 import { TaskDetailPanel } from "./TaskDetailPanel";
 import { TaskEditorDialog } from "./TaskEditorDialog";
+import type { PiTaskDraft } from "./pi-task-draft";
 
 interface KanbanWorkspaceProps {
   readonly api: StellaDesktopApi;
   readonly controller: KanbanController;
-  readonly project: ProjectMeta;
+  readonly project?: ProjectMeta;
+  readonly executionEnabled: boolean;
+  readonly taskCapabilityError?: string;
+  readonly taskCapabilityRetrying: boolean;
+  readonly onRetryTaskCapability: () => void;
   readonly createRequest: number;
+  readonly createDraft?: PiTaskDraft;
+  readonly onContinueTaskSession: (taskId: string, sessionPath: string) => Promise<void>;
   readonly onOpenSidebar: () => void;
   readonly onOpenTerminal: () => void;
   readonly onError: (message: string) => void;
@@ -63,23 +70,37 @@ export function KanbanWorkspace({
   api,
   controller,
   project,
+  executionEnabled,
+  taskCapabilityError,
+  taskCapabilityRetrying,
+  onRetryTaskCapability,
   createRequest,
+  createDraft,
+  onContinueTaskSession,
   onOpenSidebar,
   onOpenTerminal,
   onError,
 }: KanbanWorkspaceProps) {
   const { state } = controller;
   const [query, setQuery] = useState("");
-  const [projectScope, setProjectScope] = useState<"current" | "all">("current");
+  const [projectScope, setProjectScope] = useState<"current" | "all">(project ? "current" : "all");
   const [workflowFilter, setWorkflowFilter] = useState("all");
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const [editorTaskId, setEditorTaskId] = useState<string | "new">();
+  const [newTaskDraft, setNewTaskDraft] = useState<PiTaskDraft>();
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
 
   useEffect(() => {
-    if (createRequest > 0) setEditorTaskId("new");
-  }, [createRequest]);
+    if (createRequest > 0 && project) {
+      setNewTaskDraft(createDraft);
+      setEditorTaskId("new");
+    }
+  }, [createDraft, createRequest, project]);
+
+  useEffect(() => {
+    if (!project) setProjectScope("all");
+  }, [project]);
 
   const bootstrap = state.bootstrap;
   const board = bootstrap?.board;
@@ -88,6 +109,12 @@ export function KanbanWorkspace({
   const editorTask = editorTaskId && editorTaskId !== "new"
     ? board?.tasks.find((task) => task.id === editorTaskId)
     : undefined;
+  const editorProject: ProjectMeta | undefined = editorTask ? Object.freeze({
+    cwd: editorTask.projectPath,
+    name: editorTask.projectName,
+    trusted: editorTask.trusted,
+    requiresTrust: false,
+  }) : project;
 
   useEffect(() => {
     if (selectedTaskId && board && !board.tasks.some((task) => task.id === selectedTaskId)) setSelectedTaskId(undefined);
@@ -97,11 +124,11 @@ export function KanbanWorkspace({
     if (!board) return [];
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return board.tasks
-      .filter((task) => projectScope === "all" || task.projectPath === project.cwd)
+      .filter((task) => projectScope === "all" || task.projectPath === project?.cwd)
       .filter((task) => workflowFilter === "all" || (task.executionTarget.kind === "workflow" && task.executionTarget.workflowId === workflowFilter))
       .filter((task) => !normalizedQuery || `${task.title} ${task.description} ${task.acceptanceCriteria} ${task.projectName}`.toLocaleLowerCase().includes(normalizedQuery))
       .sort((left, right) => PRIORITY_ORDER[left.priority] - PRIORITY_ORDER[right.priority] || Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
-  }, [board, project.cwd, projectScope, query, workflowFilter]);
+  }, [board, project?.cwd, projectScope, query, workflowFilter]);
 
   const report = (cause: unknown) => {
     const message = cause instanceof Error ? cause.message : String(cause);
@@ -117,9 +144,9 @@ export function KanbanWorkspace({
     }
   };
 
-  const move = async (taskId: string, status: ManualTaskStatus) => {
+  const move = async (taskId: string, stage: ManualTaskStage) => {
     try {
-      await controller.moveTask(taskId, status);
+      await controller.moveTask(taskId, stage);
     } catch (cause) {
       report(cause);
       throw cause;
@@ -131,7 +158,7 @@ export function KanbanWorkspace({
     if (!MANUAL_LANES.has(lane)) return;
     const taskId = event.dataTransfer.getData("application/x-stella-task");
     if (!taskId) return;
-    void move(taskId, lane as ManualTaskStatus).catch(() => undefined);
+    void move(taskId, lane as ManualTaskStage).catch(() => undefined);
   };
 
   if (state.phase === "error" && (!bootstrap || !board || !catalog)) {
@@ -139,7 +166,10 @@ export function KanbanWorkspace({
       <main className="kanban-workspace kanban-workspace--error">
         <FolderKanban size={30} />
         <h1>看板没有加载成功</h1>
-        <p>{state.error}</p>
+        <p>{taskCapabilityError ?? state.error}</p>
+        <button type="button" className="button-primary" disabled={taskCapabilityRetrying} onClick={onRetryTaskCapability}>
+          {taskCapabilityRetrying ? "正在重试" : "重试 Task Control"}
+        </button>
       </main>
     );
   }
@@ -170,15 +200,15 @@ export function KanbanWorkspace({
         </div>
         <div className="kanban-header__actions">
           <button type="button" className="button-secondary" onClick={() => setCatalogOpen(true)}><Users size={15} />编排目录</button>
-          <button type="button" className="button-secondary" onClick={() => setAutomationOpen(true)}><Zap size={15} />自动化</button>
-          <button type="button" className="icon-button" aria-label="打开命令终端" onClick={onOpenTerminal}><TerminalSquare size={16} /></button>
-          <button type="button" className="button-primary" onClick={() => setEditorTaskId("new")}><Plus size={15} />新建任务</button>
+          <button type="button" className="button-secondary" disabled={!project} onClick={() => setAutomationOpen(true)}><Zap size={15} />自动化</button>
+          <button type="button" className="icon-button" disabled={!project} aria-label="打开命令终端" onClick={onOpenTerminal}><TerminalSquare size={16} /></button>
+          <button type="button" className="button-primary" disabled={!project} onClick={() => { setNewTaskDraft(undefined); setEditorTaskId("new"); }}><Plus size={15} />新建任务</button>
         </div>
       </header>
 
       <div className="kanban-controls">
         <div className="kanban-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、说明或验收标准" />{query && <button type="button" onClick={() => setQuery("")}>清除</button>}</div>
-        <label className="kanban-select"><span>项目</span><select value={projectScope} onChange={(event) => setProjectScope(event.target.value as "current" | "all")}><option value="current">{project.name}</option><option value="all">全部项目</option></select><ChevronDown size={13} /></label>
+        <label className="kanban-select"><span>项目</span><select value={projectScope} disabled={!project} onChange={(event) => setProjectScope(event.target.value as "current" | "all")}>{project && <option value="current">{project.name}</option>}<option value="all">全部项目</option></select><ChevronDown size={13} /></label>
         <label className="kanban-select"><Workflow size={13} /><select value={workflowFilter} onChange={(event) => setWorkflowFilter(event.target.value)}><option value="all">全部流程</option>{catalog.workflows.map((workflow) => <option value={workflow.id} key={workflow.id}>{workflow.shortName}</option>)}</select><ChevronDown size={13} /></label>
         <span className="kanban-controls__count">显示 {visibleTasks.length} / {board.tasks.length} 项</span>
       </div>
@@ -188,7 +218,7 @@ export function KanbanWorkspace({
       <div className="kanban-stage">
         <div className="kanban-board" aria-label="任务看板">
           {LANE_CONFIG.map((lane) => {
-            const tasks = visibleTasks.filter((task) => boardLaneForStatus(task.status) === lane.id);
+            const tasks = visibleTasks.filter((task) => boardLaneForStage(task.stage) === lane.id);
             return (
               <section
                 className={`kanban-lane kanban-lane--${lane.id} ${MANUAL_LANES.has(lane.id) ? "is-droppable" : ""}`}
@@ -205,7 +235,8 @@ export function KanbanWorkspace({
                     const runs = taskRuns(task.id);
                     const run = runs.find((candidate) => candidate.id === task.activeRunId) ?? runs[0];
                     const agentTasks = taskAgentTasks(task.id);
-                    const agentTask = agentTasks.find((candidate) => candidate.id === task.activeAgentTaskId) ?? agentTasks.at(-1);
+                    const agentTask = agentTasks.find((candidate) => candidate.id === task.activeAgentTaskId)
+                      ?? [...agentTasks].reverse().find((candidate) => !candidate.parentAgentTaskId);
                     const workflow = workflowForTask(task, catalog);
                     return (
                       <TaskCard
@@ -219,6 +250,7 @@ export function KanbanWorkspace({
                         liveEvent={task.activeRunId && run ? state.liveEvents[run.id] : undefined}
                         liveAgentTaskEvent={agentTask ? state.liveAgentTaskEvents[agentTask.id] : undefined}
                         busy={state.pending.includes(task.id)}
+                        executionEnabled={executionEnabled}
                         onOpen={() => setSelectedTaskId(task.id)}
                         onDispatch={() => void dispatch(task.id).catch(() => undefined)}
                         onDragStart={(event) => {
@@ -245,6 +277,7 @@ export function KanbanWorkspace({
             comments={taskComments(selectedTask.id)}
             activities={taskActivities(selectedTask.id)}
             busy={state.pending.includes(selectedTask.id)}
+            executionEnabled={executionEnabled}
             onClose={() => setSelectedTaskId(undefined)}
             onEdit={() => setEditorTaskId(selectedTask.id)}
             onDispatch={() => dispatch(selectedTask.id)}
@@ -265,20 +298,21 @@ export function KanbanWorkspace({
               try { await controller.resolveGate(input); }
               catch (cause) { report(cause); throw cause; }
             }}
+            onReviewExecution={async (input) => {
+              try { await controller.reviewExecution(input); }
+              catch (cause) { report(cause); throw cause; }
+            }}
             onRevealPath={(path) => void api.revealPath(path)}
+            onContinueInPi={(sessionPath) => onContinueTaskSession(selectedTask.id, sessionPath)}
           />
         )}
       </div>
 
-      {editorTaskId && (
+      {editorTaskId && editorProject && (
         <TaskEditorDialog
           task={editorTask}
-          project={editorTask ? {
-            ...project,
-            cwd: editorTask.projectPath,
-            name: editorTask.projectName,
-            trusted: editorTask.trusted,
-          } : project}
+          draft={editorTaskId === "new" ? newTaskDraft : undefined}
+          project={editorProject}
           workflows={catalog.workflows}
           agents={catalog.agents}
           squads={board.squads}
@@ -289,7 +323,7 @@ export function KanbanWorkspace({
         />
       )}
       {catalogOpen && <CatalogDialog catalog={catalog} onClose={() => setCatalogOpen(false)} />}
-      {automationOpen && (
+      {automationOpen && project && (
         <AutomationStudioDialog
           catalog={catalog}
           project={project}

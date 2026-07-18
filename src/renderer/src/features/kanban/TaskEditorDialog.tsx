@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Bot, Check, Folder, GitBranch, Sparkles, Users } from "lucide-react";
+import { Bot, Check, Folder, GitBranch, MessageSquareShare, Sparkles, Users } from "lucide-react";
 import type {
   AgentDefinition,
   CreateTaskInput,
@@ -12,9 +12,11 @@ import type {
 } from "@shared/kanban";
 import type { ProjectMeta } from "@shared/contracts";
 import { Modal } from "../../components/Modal";
+import type { PiTaskDraft } from "./pi-task-draft";
 
 interface TaskEditorDialogProps {
   readonly task?: KanbanTask;
+  readonly draft?: PiTaskDraft;
   readonly project: ProjectMeta;
   readonly workflows: readonly WorkflowDefinition[];
   readonly agents: readonly AgentDefinition[];
@@ -39,11 +41,11 @@ function targetId(target: ExecutionTarget | undefined, workflows: readonly Workf
   return target.squadId;
 }
 
-export function TaskEditorDialog({ task, project, workflows, agents, squads, busy, onClose, onCreate, onUpdate }: TaskEditorDialogProps) {
-  const [title, setTitle] = useState(task?.title ?? "");
-  const [description, setDescription] = useState(task?.description ?? "");
-  const [acceptanceCriteria, setAcceptanceCriteria] = useState(task?.acceptanceCriteria ?? "");
-  const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "medium");
+export function TaskEditorDialog({ task, draft, project, workflows, agents, squads, busy, onClose, onCreate, onUpdate }: TaskEditorDialogProps) {
+  const [title, setTitle] = useState(task?.title ?? draft?.title ?? "");
+  const [description, setDescription] = useState(task?.description ?? draft?.description ?? "");
+  const [acceptanceCriteria, setAcceptanceCriteria] = useState(task?.acceptanceCriteria ?? draft?.acceptanceCriteria ?? "");
+  const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? draft?.priority ?? "medium");
   const [executionKind, setExecutionKind] = useState<ExecutionTarget["kind"]>(task?.executionTarget.kind ?? "workflow");
   const [executionId, setExecutionId] = useState(targetId(task?.executionTarget, workflows));
   const [error, setError] = useState("");
@@ -77,6 +79,8 @@ export function TaskEditorDialog({ task, project, workflows, agents, squads, bus
           projectPath: project.cwd,
           projectName: project.name,
           trusted: project.trusted,
+          sourcePiSessionPath: draft?.sourcePiSessionPath,
+          sourcePiSessionId: draft?.sourcePiSessionId,
         });
       }
       onClose();
@@ -98,6 +102,13 @@ export function TaskEditorDialog({ task, project, workflows, agents, squads, bus
           {project.branch && <span><GitBranch size={13} />{project.branch}</span>}
           <small>{task ? "任务项目创建后保持不变" : project.cwd}</small>
         </div>
+
+        {!task && draft && (
+          <div className="task-editor__pi-source">
+            <MessageSquareShare size={15} />
+            <div><strong>来自当前 Pi 会话的可编辑草稿</strong><small>保存后只创建待规划任务，不会自动分发。来源 session identity 将随任务保存。</small></div>
+          </div>
+        )}
 
         <label className="kanban-field">
           <span>任务标题 <i>必填</i></span>

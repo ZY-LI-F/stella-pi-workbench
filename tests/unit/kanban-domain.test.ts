@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BOARD_SCHEMA_VERSION,
-  boardLaneForStatus,
+  boardLaneForStage,
   canMoveTaskManually,
   parseBoardState,
   workflowProgress,
@@ -19,16 +19,15 @@ const task: KanbanTask = Object.freeze({
   projectName: "project",
   trusted: true,
   executionTarget: { kind: "workflow", workflowId: "feature-delivery" },
-  status: "planned",
+  stage: "planned",
   createdAt: "2026-07-17T00:00:00.000Z",
   updatedAt: "2026-07-17T00:00:00.000Z",
 });
 
 describe("kanban domain", () => {
-  it("maps failure states to the blocked lane without erasing the real status", () => {
-    expect(boardLaneForStatus("failed")).toBe("blocked");
-    expect(boardLaneForStatus("interrupted")).toBe("blocked");
-    expect(boardLaneForStatus("review")).toBe("review");
+  it("uses an explicit business stage without deriving it from execution status", () => {
+    expect(boardLaneForStage("blocked")).toBe("blocked");
+    expect(boardLaneForStage("review")).toBe("review");
   });
 
   it("only allows inactive tasks into truthful manual lanes", () => {

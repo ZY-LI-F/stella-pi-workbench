@@ -1,13 +1,11 @@
-import type { BoardLane, TaskPriority, TaskStatus } from "@shared/kanban";
+import type { BoardLane, ExecutionAcceptanceStatus, TaskPriority, TaskStage } from "@shared/kanban";
 
-export const STATUS_LABEL: Readonly<Record<TaskStatus, string>> = Object.freeze({
+export const STAGE_LABEL: Readonly<Record<TaskStage, string>> = Object.freeze({
   planned: "待规划",
   queued: "待运行",
   running: "执行中",
   review: "待审核",
   blocked: "受阻",
-  failed: "失败",
-  interrupted: "已中断",
   completed: "已完成",
 });
 
@@ -16,6 +14,29 @@ export const PRIORITY_LABEL: Readonly<Record<TaskPriority, string>> = Object.fre
   medium: "普通",
   high: "高",
   urgent: "紧急",
+});
+
+export const ACCEPTANCE_LABEL: Readonly<Record<ExecutionAcceptanceStatus, string>> = Object.freeze({
+  "not-ready": "不可验收",
+  pending: "待验收",
+  accepted: "已接受",
+  "revision-requested": "需修订",
+  rejected: "已拒绝",
+});
+
+export const EXECUTION_STATUS_LABEL: Readonly<Record<string, string>> = Object.freeze({
+  pending: "待执行",
+  queued: "排队中",
+  running: "执行中",
+  waiting: "等待人工",
+  succeeded: "已产出",
+  review: "人工关卡",
+  blocked: "流程受阻",
+  waiting_children: "等待子任务",
+  reported: "已报告",
+  failed: "执行失败",
+  interrupted: "已中断",
+  cancelled: "已取消",
 });
 
 export const LANE_CONFIG: readonly {

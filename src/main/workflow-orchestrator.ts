@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { PiCommand, PiResponse, RuntimeSignal } from "../shared/contracts";
+import { backgroundSessionName } from "../shared/session-policy";
 import {
   type AgentArtifact,
   type AgentDefinition,
@@ -15,6 +16,12 @@ import {
   type WorkflowRun,
 } from "../shared/kanban";
 import type { BoardRepository } from "./board-repository";
+import {
+  WorkspaceAdmission,
+  WorkspaceAdmissionAbortError,
+  assertAgentWorkspacePolicy,
+  type WorkspaceLease,
+} from "./workspace-admission";
 
 export interface WorkflowAgentRuntime {
   readonly running: boolean;
@@ -47,6 +54,7 @@ interface OrchestratorDependencies {
   readonly catalog: OrchestrationCatalog;
   readonly runtimeFactory: WorkflowRuntimeFactory;
   readonly emitBoardEvent: (event: BoardBridgeEvent) => void;
+  readonly admission: WorkspaceAdmission;
   readonly now?: () => string;
   readonly id?: () => string;
 }
@@ -55,10 +63,14 @@ interface ActiveAgentRun {
   readonly taskId: string;
   readonly runId: string;
   readonly stepId: string;
-  readonly projectPath: string;
-  readonly workspaceAccess: AgentDefinition["workspaceAccess"];
   readonly runtime: WorkflowAgentRuntime;
+  readonly lease?: WorkspaceLease;
   settling: boolean;
+}
+
+interface WaitingAdmission {
+  readonly taskId: string;
+  readonly controller: AbortController;
 }
 
 interface RpcStateData {
@@ -103,28 +115,31 @@ export class WorkflowOrchestrator {
   readonly #catalog: OrchestrationCatalog;
   readonly #runtimeFactory: WorkflowRuntimeFactory;
   readonly #emitBoardEvent: (event: BoardBridgeEvent) => void;
+  readonly #admission: WorkspaceAdmission;
   readonly #now: () => string;
   readonly #id: () => string;
   readonly #activeAgents = new Map<string, ActiveAgentRun>();
-  readonly #writerLocks = new Map<string, string>();
-  readonly #writerQueues = new Map<string, string[]>();
+  readonly #waitingAdmissions = new Map<string, WaitingAdmission>();
+  #stopping = false;
 
   constructor(dependencies: OrchestratorDependencies) {
     this.#repository = dependencies.repository;
     this.#catalog = dependencies.catalog;
     this.#runtimeFactory = dependencies.runtimeFactory;
     this.#emitBoardEvent = dependencies.emitBoardEvent;
+    this.#admission = dependencies.admission;
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#id = dependencies.id ?? randomUUID;
   }
 
   async dispatch(taskId: string): Promise<BoardBootstrap> {
+    if (this.#stopping) throw new Error("WorkflowOrchestrator 正在关闭");
     const now = this.#now();
     let runId = "";
     const bootstrap = await this.#commit((current) => {
       const task = this.#task(current, taskId);
       if (task.activeRunId || task.activeAgentTaskId) throw new Error("任务已有正在进行的执行");
-      if (task.status === "completed") throw new Error("已完成任务需先移回待规划列才能重新分发");
+      if (task.stage === "completed") throw new Error("已完成任务需先移回待规划列才能重新分发");
       if (task.executionTarget.kind !== "workflow") throw new Error("任务的执行目标不是固定流程");
       const workflowDefinition = this.#workflow(task.executionTarget.workflowId);
       const workflow = cloneWorkflow(workflowDefinition);
@@ -137,6 +152,7 @@ export class WorkflowOrchestrator {
         workflow,
         agents,
         status: "queued",
+        acceptance: "not-ready",
         steps: Object.freeze(workflow.steps.map((step) => Object.freeze({
           id: this.#id(),
           stepId: step.id,
@@ -150,9 +166,7 @@ export class WorkflowOrchestrator {
       });
       const nextTask: KanbanTask = Object.freeze({
         ...task,
-        status: "queued",
         activeRunId: run.id,
-        blockedReason: undefined,
         updatedAt: now,
       });
       return {
@@ -197,9 +211,7 @@ export class WorkflowOrchestrator {
         });
         const blockedTask: KanbanTask = Object.freeze({
           ...task,
-          status: "blocked",
           activeRunId: undefined,
-          blockedReason: comment || `${step.name}被驳回`,
           updatedAt: now,
         });
         return {
@@ -223,10 +235,8 @@ export class WorkflowOrchestrator {
         steps: Object.freeze(run.steps.map((candidate) => candidate.id === step.id ? approvedStep : candidate)),
         updatedAt: now,
       });
-      const runningTask: KanbanTask = Object.freeze({ ...task, status: "running", updatedAt: now });
       return {
         ...current,
-        tasks: current.tasks.map((candidate) => candidate.id === task.id ? runningTask : candidate),
         runs: current.runs.map((candidate) => candidate.id === run.id ? runningRun : candidate),
         activities: [...current.activities, this.#activity(task.id, "gate", `${step.name}已批准`, comment || undefined, now, run.id, step.stepId)],
       };
@@ -240,12 +250,13 @@ export class WorkflowOrchestrator {
     const task = this.#task(state, taskId);
     if (!task.activeRunId) throw new Error("任务当前没有可中止的流程");
     const runId = task.activeRunId;
+    this.#waitingAdmissions.get(runId)?.controller.abort();
     const active = this.#activeAgents.get(runId);
     const now = this.#now();
     const bootstrap = await this.#commit((current) => {
       const latestTask = this.#task(current, taskId);
       const run = this.#run(current, runId);
-      if (["failed", "blocked", "interrupted", "completed"].includes(run.status)) {
+      if (["failed", "blocked", "interrupted", "reported"].includes(run.status)) {
         throw new Error("流程已经进入终态，不能再次中止");
       }
       const interruptedRun: WorkflowRun = Object.freeze({
@@ -260,9 +271,7 @@ export class WorkflowOrchestrator {
       });
       const interruptedTask: KanbanTask = Object.freeze({
         ...latestTask,
-        status: "interrupted",
         activeRunId: undefined,
-        blockedReason: "用户中止流程",
         updatedAt: now,
       });
       return {
@@ -273,15 +282,25 @@ export class WorkflowOrchestrator {
       };
     });
     this.#activeAgents.delete(runId);
-    this.#releaseWriter(runId, task.projectPath);
-    if (active) await active.runtime.stop();
+    if (active) {
+      try {
+        await active.runtime.stop();
+      } finally {
+        active.lease?.release();
+      }
+    }
     return bootstrap;
   }
 
   async shutdown(): Promise<void> {
+    this.#stopping = true;
+    for (const waiting of this.#waitingAdmissions.values()) waiting.controller.abort();
     const active = [...this.#activeAgents.values()];
     const now = this.#now();
-    const activeRunIds = new Set(active.map((entry) => entry.runId));
+    const activeRunIds = new Set([
+      ...active.map((entry) => entry.runId),
+      ...this.#waitingAdmissions.keys(),
+    ]);
     if (activeRunIds.size > 0) {
       await this.#repository.update((current) => {
         const tasksByRunId = new Map(current.tasks.filter((task) => task.activeRunId).map((task) => [task.activeRunId as string, task]));
@@ -299,9 +318,7 @@ export class WorkflowOrchestrator {
           tasks: current.tasks.map((task) => task.activeRunId && interruptedRunIds.has(task.activeRunId)
             ? Object.freeze({
                 ...task,
-                status: "interrupted" as const,
                 activeRunId: undefined,
-                blockedReason: "Stella 在流程运行期间关闭。",
                 updatedAt: now,
               })
             : task),
@@ -322,16 +339,22 @@ export class WorkflowOrchestrator {
       });
     }
     this.#activeAgents.clear();
-    this.#writerLocks.clear();
-    this.#writerQueues.clear();
-    await Promise.all(active.map((entry) => entry.runtime.stop()));
+    this.#waitingAdmissions.clear();
+    await Promise.all(active.map(async (entry) => {
+      try {
+        await entry.runtime.stop();
+      } finally {
+        entry.lease?.release();
+      }
+    }));
   }
 
   async #advance(runId: string): Promise<void> {
+    if (this.#stopping) return;
     const state = await this.#repository.read();
     const run = this.#run(state, runId);
     const task = this.#task(state, run.taskId);
-    if (task.activeRunId !== run.id || ["blocked", "failed", "interrupted", "completed"].includes(run.status)) return;
+    if (task.activeRunId !== run.id || ["blocked", "failed", "interrupted", "reported"].includes(run.status)) return;
     const step = run.steps.find((candidate) => candidate.status === "pending");
     if (!step) {
       await this.#completeRun(run, task);
@@ -345,24 +368,52 @@ export class WorkflowOrchestrator {
     }
     const agent = run.agents.find((candidate) => candidate.id === definition.agentId);
     if (!agent) throw new Error(`流程快照缺少 Agent: ${definition.agentId}`);
-    if (agent.workspaceAccess === "write" && !this.#acquireWriter(task.projectPath, run.id)) {
-      await this.#queueForWriter(run, task, step, agent);
-      return;
+    assertAgentWorkspacePolicy(agent);
+    let lease: WorkspaceLease | undefined;
+    if (agent.workspaceAccess === "write") {
+      const controller = new AbortController();
+      const waiting = Object.freeze({ taskId: task.id, controller });
+      this.#waitingAdmissions.set(run.id, waiting);
+      try {
+        lease = await this.#admission.acquireBackground(task.projectPath, {
+          id: `workflow:${run.id}:${step.stepId}`,
+          kind: "workflow",
+          label: `Workflow · ${run.workflow.shortName} / ${agent.name}`,
+          taskId: task.id,
+          executionId: run.id,
+        }, {
+          signal: controller.signal,
+          onQueued: (owner) => this.#queueForWriter(run, task, step, agent, owner.label),
+        });
+      } catch (cause) {
+        if (cause instanceof WorkspaceAdmissionAbortError) return;
+        throw cause;
+      } finally {
+        if (this.#waitingAdmissions.get(run.id) === waiting) this.#waitingAdmissions.delete(run.id);
+      }
+      if (this.#stopping) {
+        lease.release();
+        return;
+      }
+      const latest = await this.#repository.read();
+      const latestTask = latest.tasks.find((candidate) => candidate.id === task.id);
+      const latestRun = latest.runs.find((candidate) => candidate.id === run.id);
+      const latestStep = latestRun?.steps.find((candidate) => candidate.id === step.id);
+      if (latestTask?.activeRunId !== run.id || !latestRun || !latestStep || latestStep.status !== "pending" || ["failed", "blocked", "interrupted", "reported"].includes(latestRun.status)) {
+        lease.release();
+        return;
+      }
     }
-    await this.#startAgent(run, task, step, definition.objective, agent);
+    await this.#startAgent(run, task, step, definition.objective, agent, lease);
   }
 
   async #waitAtGate(run: WorkflowRun, task: KanbanTask, step: StepRun): Promise<void> {
     const now = this.#now();
     await this.#commit((current) => {
       const latestRun = this.#run(current, run.id);
-      const latestTask = this.#task(current, task.id);
       const waitingStep: StepRun = Object.freeze({ ...step, status: "waiting", startedAt: now });
       return {
         ...current,
-        tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...latestTask, status: "review" as const, updatedAt: now })
-          : candidate),
         runs: current.runs.map((candidate) => candidate.id === run.id
           ? Object.freeze({
               ...latestRun,
@@ -377,20 +428,16 @@ export class WorkflowOrchestrator {
     });
   }
 
-  async #queueForWriter(run: WorkflowRun, task: KanbanTask, step: StepRun, agent: AgentDefinition): Promise<void> {
+  async #queueForWriter(run: WorkflowRun, task: KanbanTask, step: StepRun, agent: AgentDefinition, blockingOwner: string): Promise<void> {
     const now = this.#now();
     await this.#commit((current) => {
       const latestRun = this.#run(current, run.id);
-      const latestTask = this.#task(current, task.id);
       return {
         ...current,
-        tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...latestTask, status: "queued" as const, updatedAt: now })
-          : candidate),
         runs: current.runs.map((candidate) => candidate.id === run.id
           ? Object.freeze({ ...latestRun, status: "queued" as const, currentStepId: step.stepId, updatedAt: now })
           : candidate),
-        activities: [...current.activities, this.#activity(task.id, "status", `${agent.name}等待项目写入席位`, "同一项目同一时间只允许一个可写 Agent 运行", now, run.id, step.stepId)],
+        activities: [...current.activities, this.#activity(task.id, "status", `${agent.name}等待项目写入席位`, `当前占用者：${blockingOwner}`, now, run.id, step.stepId)],
       };
     });
   }
@@ -401,6 +448,7 @@ export class WorkflowOrchestrator {
     step: StepRun,
     objective: string,
     agent: AgentDefinition,
+    lease?: WorkspaceLease,
   ): Promise<void> {
     const runtime = this.#runtimeFactory.create({
       emitPiEvent: (event) => void this.#handlePiEvent(run.id, event).catch((error) => this.#failRun(run.id, error)),
@@ -410,22 +458,17 @@ export class WorkflowOrchestrator {
       taskId: task.id,
       runId: run.id,
       stepId: step.stepId,
-      projectPath: task.projectPath,
-      workspaceAccess: agent.workspaceAccess,
       runtime,
+      lease,
       settling: false,
     };
     this.#activeAgents.set(run.id, active);
     const now = this.#now();
     await this.#commit((current) => {
       const latestRun = this.#run(current, run.id);
-      const latestTask = this.#task(current, task.id);
       const runningStep: StepRun = Object.freeze({ ...step, status: "running", startedAt: now });
       return {
         ...current,
-        tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...latestTask, status: "running" as const, updatedAt: now })
-          : candidate),
         runs: current.runs.map((candidate) => candidate.id === run.id
           ? Object.freeze({
               ...latestRun,
@@ -441,13 +484,22 @@ export class WorkflowOrchestrator {
 
     try {
       if (this.#activeAgents.get(run.id) !== active) {
-        await runtime.stop();
+        try {
+          await runtime.stop();
+        } finally {
+          active.lease?.release();
+        }
         return;
       }
       await runtime.start({
         cwd: task.projectPath,
         trusted: task.trusted,
-        sessionName: `[Stella] ${task.title} · ${step.name}`,
+        sessionName: backgroundSessionName({
+          taskId: task.id,
+          executionKind: "workflow-step",
+          executionId: step.id,
+          label: `${task.title} · ${step.name}`,
+        }),
         provider: agent.provider,
         model: agent.model,
         thinking: agent.thinking,
@@ -458,7 +510,11 @@ export class WorkflowOrchestrator {
         disablePromptTemplates: agent.disablePromptTemplates,
       });
       if (this.#activeAgents.get(run.id) !== active) {
-        await runtime.stop();
+        try {
+          await runtime.stop();
+        } finally {
+          active.lease?.release();
+        }
         return;
       }
       await runtime.send({ type: "prompt", message: this.#promptFor(run, task, step, objective, agent) });
@@ -537,14 +593,22 @@ export class WorkflowOrchestrator {
       const state = responseData<RpcStateData>(stateResponse, "get_state");
       const stats = responseData<RpcStatsData>(statsResponse, "get_session_stats");
       if (this.#activeAgents.get(active.runId) !== active) {
-        await active.runtime.stop();
+        try {
+          await active.runtime.stop();
+        } finally {
+          active.lease?.release();
+        }
         return;
       }
       const board = await this.#repository.read();
       const run = this.#run(board, active.runId);
-      if (["failed", "blocked", "interrupted", "completed"].includes(run.status)) {
+      if (["failed", "blocked", "interrupted", "reported"].includes(run.status)) {
         this.#activeAgents.delete(active.runId);
-        await active.runtime.stop();
+        try {
+          await active.runtime.stop();
+        } finally {
+          active.lease?.release();
+        }
         return;
       }
       const step = run.steps.find((candidate) => candidate.stepId === active.stepId);
@@ -567,9 +631,6 @@ export class WorkflowOrchestrator {
         const completedStep: StepRun = Object.freeze({ ...step, status: "succeeded", completedAt: now, sessionPath: state.sessionFile, artifact });
         return {
           ...current,
-          tasks: current.tasks.map((candidate) => candidate.id === active.taskId
-            ? Object.freeze({ ...latestTask, status: "running" as const, updatedAt: now })
-            : candidate),
           runs: current.runs.map((candidate) => candidate.id === active.runId
             ? Object.freeze({
                 ...latestRun,
@@ -583,8 +644,11 @@ export class WorkflowOrchestrator {
         };
       });
       this.#activeAgents.delete(active.runId);
-      await active.runtime.stop();
-      if (active.workspaceAccess === "write") this.#releaseWriter(active.runId, active.projectPath);
+      try {
+        await active.runtime.stop();
+      } finally {
+        active.lease?.release();
+      }
       await this.#advance(active.runId);
     } catch (error) {
       await this.#failRun(active.runId, error);
@@ -599,10 +663,10 @@ export class WorkflowOrchestrator {
       return {
         ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
-          ? Object.freeze({ ...latestTask, status: "completed" as const, activeRunId: undefined, blockedReason: undefined, updatedAt: now })
+          ? Object.freeze({ ...latestTask, activeRunId: undefined, updatedAt: now })
           : candidate),
         runs: current.runs.map((candidate) => candidate.id === run.id
-          ? Object.freeze({ ...latestRun, status: "completed" as const, currentStepId: undefined, updatedAt: now, completedAt: now })
+          ? Object.freeze({ ...latestRun, status: "reported" as const, acceptance: "pending" as const, currentStepId: undefined, updatedAt: now, completedAt: now })
           : candidate),
         activities: [...current.activities, this.#activity(task.id, "status", "流程已完成", run.workflow.name, now, run.id)],
       };
@@ -613,12 +677,18 @@ export class WorkflowOrchestrator {
     const message = cause instanceof Error ? cause.message : String(cause);
     const active = this.#activeAgents.get(runId);
     this.#activeAgents.delete(runId);
-    if (active) await active.runtime.stop();
+    this.#waitingAdmissions.get(runId)?.controller.abort();
+    if (active) {
+      try {
+        await active.runtime.stop();
+      } finally {
+        active.lease?.release();
+      }
+    }
     const state = await this.#repository.read();
     const run = state.runs.find((candidate) => candidate.id === runId);
-    if (!run || ["failed", "blocked", "interrupted", "completed"].includes(run.status)) return;
+    if (!run || ["failed", "blocked", "interrupted", "reported"].includes(run.status)) return;
     const task = this.#task(state, run.taskId);
-    this.#releaseWriter(runId, task.projectPath);
     const now = this.#now();
     await this.#commit((current) => {
       const latestRun = this.#run(current, runId);
@@ -635,9 +705,7 @@ export class WorkflowOrchestrator {
       });
       const failedTask: KanbanTask = Object.freeze({
         ...latestTask,
-        status: "failed",
         activeRunId: undefined,
-        blockedReason: message,
         updatedAt: now,
       });
       return {
@@ -676,36 +744,6 @@ export class WorkflowOrchestrator {
       ``,
       `只完成当前角色职责。最终回复必须是一份可交给下一角色或人工关卡的独立产物，并如实写明失败和未验证项。`,
     ].join("\n");
-  }
-
-  #acquireWriter(projectPath: string, runId: string): boolean {
-    const owner = this.#writerLocks.get(projectPath);
-    if (!owner || owner === runId) {
-      this.#writerLocks.set(projectPath, runId);
-      return true;
-    }
-    const queue = this.#writerQueues.get(projectPath) ?? [];
-    if (!queue.includes(runId)) this.#writerQueues.set(projectPath, [...queue, runId]);
-    return false;
-  }
-
-  #releaseWriter(runId: string, projectPath: string): void {
-    const queue = (this.#writerQueues.get(projectPath) ?? []).filter((candidate) => candidate !== runId);
-    const releasedOwner = this.#writerLocks.get(projectPath) === runId;
-    if (!releasedOwner) {
-      if (queue.length > 0) this.#writerQueues.set(projectPath, queue);
-      else this.#writerQueues.delete(projectPath);
-      return;
-    }
-    this.#writerLocks.delete(projectPath);
-    const next = queue[0];
-    if (next) {
-      this.#writerQueues.set(projectPath, queue.slice(1));
-      this.#writerLocks.set(projectPath, next);
-      void this.#advance(next).catch((error) => this.#failRun(next, error));
-    } else {
-      this.#writerQueues.delete(projectPath);
-    }
   }
 
   #task(state: BoardState, taskId: string): KanbanTask {

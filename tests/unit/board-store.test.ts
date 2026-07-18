@@ -50,11 +50,11 @@ describe("BoardStore", () => {
       tasks: [{
         id: "task-1", title: "运行中任务", description: "", acceptanceCriteria: "", priority: "medium",
         projectPath: "C:/project", projectName: "project", trusted: true,
-        executionTarget: { kind: "workflow", workflowId: "flow" }, status: "queued",
+        executionTarget: { kind: "workflow", workflowId: "flow" }, stage: "queued",
         activeRunId: "run-1", createdAt: now, updatedAt: now,
       }],
       runs: [{
-        id: "run-1", taskId: "task-1", status: "queued", startedAt: now, updatedAt: now,
+        id: "run-1", taskId: "task-1", status: "queued", acceptance: "not-ready", startedAt: now, updatedAt: now,
         workflow: { id: "flow", version: 1, name: "流程", shortName: "流程", summary: "测试", teamId: "team", steps: [{ kind: "agent", id: "step", name: "步骤", summary: "", agentId: "agent", objective: "执行" }] },
         agents: [TEST_AGENT],
         currentStepId: "step",
@@ -66,7 +66,7 @@ describe("BoardStore", () => {
     await writeFile(path, JSON.stringify(state), "utf8");
     let id = 0;
     const recovered = await new BoardStore(path, { now: () => now, id: () => `recovery-${++id}` }).initialize();
-    expect(recovered.tasks[0]?.status).toBe("interrupted");
+    expect(recovered.tasks[0]?.stage).toBe("queued");
     expect(recovered.tasks[0]?.activeRunId).toBeUndefined();
     expect(recovered.runs[0]?.status).toBe("interrupted");
     expect(recovered.activities[0]?.summary).toContain("应用重启");
@@ -88,11 +88,65 @@ describe("BoardStore", () => {
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, JSON.stringify(legacy), "utf8");
     const migrated = await new BoardStore(path, { now: () => now, id: () => "backup-id" }).initialize();
-    expect(migrated.version).toBe(2);
+    expect(migrated.version).toBe(3);
     expect(migrated.tasks[0]?.executionTarget).toEqual({ kind: "workflow", workflowId: "flow" });
     expect(migrated.comments).toEqual([]);
     const files = await readdir(dirname(path));
     expect(files.some((file) => file.includes(".v1.2026-07-17T01-00-00.000Z.backup-id.bak"))).toBe(true);
+  });
+
+  it("migrates the current schema v2 to v3 without losing automation history", async () => {
+    const path = await temporaryBoardPath();
+    const now = "2026-07-17T01:00:00.000Z";
+    const legacyV2 = {
+      version: 2,
+      tasks: [{
+        id: "task-v2", title: "v2 任务", description: "说明", acceptanceCriteria: "验收", priority: "high",
+        projectPath: "C:/project", projectName: "project", trusted: true,
+        executionTarget: { kind: "agent", agentId: "agent" }, status: "completed", createdAt: now, updatedAt: now,
+      }],
+      runs: [{
+        id: "run-v2", taskId: "task-v2", status: "completed", startedAt: now, updatedAt: now, completedAt: now,
+        workflow: { id: "flow", version: 1, name: "流程", shortName: "流程", summary: "测试", teamId: "team", steps: [{ kind: "agent", id: "step", name: "步骤", summary: "", agentId: "agent", objective: "执行" }] },
+        agents: [TEST_AGENT],
+        steps: [{ id: "step-run", stepId: "step", stepKind: "agent", name: "步骤", status: "succeeded", agentId: "agent", completedAt: now }],
+      }],
+      activities: [{ id: "activity-v2", taskId: "task-v2", runId: "run-v2", kind: "artifact", summary: "已有产物", createdAt: now }],
+      comments: [{ id: "comment-v2", taskId: "task-v2", author: "user", body: "保留评论", createdAt: now }],
+      agentTasks: [{
+        id: "agent-task-v2", taskId: "task-v2", agentSnapshot: TEST_AGENT, kind: "direct", status: "succeeded",
+        prompt: "执行", output: "历史结果", sessionPath: "C:/session.jsonl", createdAt: now, updatedAt: now, completedAt: now,
+      }],
+      squads: [{
+        id: "squad-v2", name: "历史 Squad", description: "保留", leaderAgentId: "leader", memberAgentIds: ["agent"],
+        leaderInstructions: "分发", createdAt: now, updatedAt: now,
+      }],
+      autopilots: [{
+        id: "autopilot-v2", name: "历史规则", enabled: true, trigger: { kind: "manual" },
+        taskTemplate: { title: "模板", description: "", acceptanceCriteria: "", priority: "medium" },
+        projectPath: "C:/project", projectName: "project", trusted: true,
+        executionTarget: { kind: "agent", agentId: "agent" }, createdAt: now, updatedAt: now,
+      }],
+      autopilotRuns: [{
+        id: "autopilot-run-v2", autopilotId: "autopilot-v2", triggerKind: "manual", status: "succeeded",
+        taskId: "task-v2", startedAt: now, completedAt: now,
+      }],
+    };
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(legacyV2), "utf8");
+
+    const migrated = await new BoardStore(path, { now: () => now, id: () => "backup-id" }).initialize();
+
+    expect(migrated.version).toBe(3);
+    expect(migrated.tasks[0]).toMatchObject({ id: "task-v2", stage: "completed" });
+    expect(migrated.runs[0]).toMatchObject({ id: "run-v2", status: "reported", acceptance: "pending" });
+    expect(migrated.agentTasks[0]).toMatchObject({ id: "agent-task-v2", status: "reported", acceptance: "pending", output: "历史结果" });
+    expect(migrated.comments[0]?.body).toBe("保留评论");
+    expect(migrated.activities[0]?.summary).toBe("已有产物");
+    expect(migrated.squads[0]?.name).toBe("历史 Squad");
+    expect(migrated.autopilots[0]?.name).toBe("历史规则");
+    expect(migrated.autopilotRuns[0]?.id).toBe("autopilot-run-v2");
+    expect((await readdir(dirname(path))).some((file) => file.includes(".v2.2026-07-17T01-00-00.000Z.backup-id.bak"))).toBe(true);
   });
 
   it("preserves queued agent work and interrupts only a running AgentTask on restart", async () => {
@@ -104,23 +158,23 @@ describe("BoardStore", () => {
         {
           id: "task-running", title: "运行中", description: "", acceptanceCriteria: "", priority: "medium",
           projectPath: "C:/project", projectName: "project", trusted: true,
-          executionTarget: { kind: "agent", agentId: "agent" }, status: "running", activeAgentTaskId: "agent-task-running",
+          executionTarget: { kind: "agent", agentId: "agent" }, stage: "running", activeAgentTaskId: "agent-task-running",
           createdAt: now, updatedAt: now,
         },
         {
           id: "task-queued", title: "排队中", description: "", acceptanceCriteria: "", priority: "medium",
           projectPath: "C:/project", projectName: "project", trusted: true,
-          executionTarget: { kind: "agent", agentId: "agent" }, status: "queued", activeAgentTaskId: "agent-task-queued",
+          executionTarget: { kind: "agent", agentId: "agent" }, stage: "queued", activeAgentTaskId: "agent-task-queued",
           createdAt: now, updatedAt: now,
         },
       ],
       agentTasks: [
         {
-          id: "agent-task-running", taskId: "task-running", agentSnapshot: TEST_AGENT, kind: "direct", status: "running",
+          id: "agent-task-running", taskId: "task-running", agentSnapshot: TEST_AGENT, kind: "direct", status: "running", acceptance: "not-ready",
           prompt: "执行", runtimeToken: "runtime", createdAt: now, updatedAt: now, startedAt: now,
         },
         {
-          id: "agent-task-queued", taskId: "task-queued", agentSnapshot: TEST_AGENT, kind: "direct", status: "queued",
+          id: "agent-task-queued", taskId: "task-queued", agentSnapshot: TEST_AGENT, kind: "direct", status: "queued", acceptance: "not-ready",
           prompt: "等待", createdAt: now, updatedAt: now,
         },
       ],

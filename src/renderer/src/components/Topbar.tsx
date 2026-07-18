@@ -3,6 +3,7 @@ import {
   GitBranch,
   Menu,
   MoonStar,
+  ListPlus,
   PanelRight,
   Settings2,
   X,
@@ -20,6 +21,7 @@ interface TopbarProps {
   readonly onModelChange: (model: ModelSummary) => void;
   readonly onThinkingChange: (level: string) => void;
   readonly onAbortRetry: () => void;
+  readonly onSolidifyTask: () => void;
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -42,6 +44,7 @@ export function Topbar({
   onModelChange,
   onThinkingChange,
   onAbortRetry,
+  onSolidifyTask,
 }: TopbarProps) {
   const selectedModel = bootstrap.state.model
     ? `${bootstrap.state.model.provider}/${bootstrap.state.model.id}`
@@ -60,6 +63,9 @@ export function Topbar({
       </div>
 
       <div className="topbar__controls">
+        <button type="button" className="button-secondary topbar__task-bridge" onClick={onSolidifyTask}>
+          <ListPlus size={14} /><span>固化为任务</span>
+        </button>
         <label className="select-control model-control">
           <span className="sr-only">模型</span>
           <select

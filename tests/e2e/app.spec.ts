@@ -37,6 +37,16 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     const taskCard = window.locator(".kanban-card", { hasText: "验证固定 Agent 看板" });
     await expect(taskCard).toBeVisible();
 
+    await taskCard.getByRole("button", { name: "验证固定 Agent 看板", exact: true }).click();
+    const taskRoom = window.getByLabel("任务详情：验证固定 Agent 看板");
+    await expect(taskRoom.getByText("任务事实流", { exact: true })).toBeVisible();
+    await expect(taskRoom.getByText("尚无持久化 Run", { exact: true })).toBeVisible();
+    const roomComposer = taskRoom.getByPlaceholder("补充上下文；用 @builder 或 @BUILD 可直接委派…");
+    await roomComposer.fill("@builder 实现后交给 @VERIFY 验证");
+    await expect(taskRoom.getByText(/提交后将创建 2 个 AgentTask/)).toBeVisible();
+    await window.screenshot({ path: "docs/task-room-stella.png", fullPage: true, animations: "disabled" });
+    await taskRoom.getByRole("button", { name: "关闭任务详情" }).click();
+
     await taskCard.dragTo(window.locator(".kanban-lane--blocked"));
     await expect(window.locator(".kanban-lane--blocked").getByText("验证固定 Agent 看板", { exact: true })).toBeVisible();
     await taskCard.dragTo(window.locator(".kanban-lane--planned"));
@@ -136,6 +146,12 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await expect(window.getByLabel("给 Pi 的消息")).toBeVisible();
     await expect(window.getByLabel("模型")).toBeVisible();
     await expect(window.getByLabel("思考级别")).toBeVisible();
+    await window.getByRole("button", { name: "固化为任务" }).click();
+    const piTaskDraft = window.getByRole("dialog", { name: "创建看板任务" });
+    await expect(piTaskDraft.getByText("来自当前 Pi 会话的可编辑草稿", { exact: true })).toBeVisible();
+    await expect(piTaskDraft.getByText(/不会自动分发/)).toBeVisible();
+    await piTaskDraft.getByRole("button", { name: "取消", exact: true }).click();
+    await window.getByRole("button", { name: "当前会话" }).click();
     await window.screenshot({ path: "docs/stella-home.png", fullPage: true, animations: "disabled" });
 
     const inspector = window.locator(".inspector.is-open");

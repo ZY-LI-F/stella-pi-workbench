@@ -7,13 +7,16 @@ import type {
   RuntimeBootstrap,
   StellaDesktopApi,
 } from "../shared/contracts";
+import type { CapabilityHealthSnapshot, CapabilityName } from "../shared/capabilities";
 import type {
   BoardBootstrap,
   CreateAutopilotInput,
   CreateTaskCommentInput,
   CreateSquadInput,
   CreateTaskInput,
-  ManualTaskStatus,
+  ManualTaskStage,
+  OpenTaskSessionInput,
+  ReviewExecutionInput,
   ResolveGateInput,
   UpdateTaskInput,
   UpdateAutopilotInput,
@@ -21,6 +24,8 @@ import type {
 } from "../shared/kanban";
 
 const api: StellaDesktopApi = Object.freeze({
+  capabilities: () => ipcRenderer.invoke("stella:capabilities") as Promise<CapabilityHealthSnapshot>,
+  retryCapability: (name: CapabilityName) => ipcRenderer.invoke("stella:capability:retry", name) as Promise<CapabilityHealthSnapshot>,
   initialize: () => ipcRenderer.invoke("stella:initialize") as Promise<RuntimeBootstrap>,
   command: (command: PiCommand) => ipcRenderer.invoke("stella:command", command),
   refresh: () => ipcRenderer.invoke("stella:refresh") as Promise<RuntimeBootstrap>,
@@ -37,8 +42,8 @@ const api: StellaDesktopApi = Object.freeze({
     ipcRenderer.invoke("stella:board:create-task", input) as Promise<BoardBootstrap>,
   boardUpdateTask: (input: UpdateTaskInput) =>
     ipcRenderer.invoke("stella:board:update-task", input) as Promise<BoardBootstrap>,
-  boardMoveTask: (taskId: string, status: ManualTaskStatus) =>
-    ipcRenderer.invoke("stella:board:move-task", taskId, status) as Promise<BoardBootstrap>,
+  boardMoveTask: (taskId: string, stage: ManualTaskStage) =>
+    ipcRenderer.invoke("stella:board:move-task", taskId, stage) as Promise<BoardBootstrap>,
   boardDeleteTask: (taskId: string) =>
     ipcRenderer.invoke("stella:board:delete-task", taskId) as Promise<BoardBootstrap>,
   boardAddComment: (input: CreateTaskCommentInput) =>
@@ -61,8 +66,12 @@ const api: StellaDesktopApi = Object.freeze({
     ipcRenderer.invoke("stella:board:dispatch-task", taskId) as Promise<BoardBootstrap>,
   boardResolveGate: (input: ResolveGateInput) =>
     ipcRenderer.invoke("stella:board:resolve-gate", input) as Promise<BoardBootstrap>,
+  boardReviewExecution: (input: ReviewExecutionInput) =>
+    ipcRenderer.invoke("stella:board:review-execution", input) as Promise<BoardBootstrap>,
   boardAbortTask: (taskId: string) =>
     ipcRenderer.invoke("stella:board:abort-task", taskId) as Promise<BoardBootstrap>,
+  openTaskSession: (input: OpenTaskSessionInput) =>
+    ipcRenderer.invoke("stella:board:open-session", input) as Promise<RuntimeBootstrap>,
   windowAction: (action: "minimize" | "maximize" | "close") =>
     ipcRenderer.invoke("stella:window-action", action) as Promise<void>,
   onEvent: (listener: (event: BridgeEvent) => void) => {

@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_ORCHESTRATION_CATALOG } from "../../src/shared/orchestration-catalog";
-import type { Autopilot, KanbanTask } from "../../src/shared/kanban";
+import type { AgentTask, Autopilot, KanbanTask } from "../../src/shared/kanban";
 import { TaskDetailPanel } from "../../src/renderer/src/features/kanban/TaskDetailPanel";
 import { TaskEditorDialog } from "../../src/renderer/src/features/kanban/TaskEditorDialog";
 import { AutomationStudioDialog } from "../../src/renderer/src/features/kanban/AutomationStudioDialog";
@@ -28,7 +28,7 @@ const TASK: KanbanTask = Object.freeze({
   projectName: PROJECT.name,
   trusted: PROJECT.trusted,
   executionTarget: Object.freeze({ kind: "agent", agentId: "builder" }),
-  status: "planned",
+  stage: "planned",
   createdAt: "2026-07-18T00:00:00.000Z",
   updatedAt: "2026-07-18T00:00:00.000Z",
 });
@@ -45,6 +45,23 @@ const WEBHOOK_AUTOPILOT: Autopilot = Object.freeze({
   executionTarget: Object.freeze({ kind: "agent", agentId: "builder" }),
   createdAt: "2026-07-18T00:00:00.000Z",
   updatedAt: "2026-07-18T00:00:00.000Z",
+});
+
+const BUILDER = BUILTIN_ORCHESTRATION_CATALOG.agents.find((agent) => agent.id === "builder");
+if (!BUILDER) throw new Error("测试目录缺少 builder");
+const REPORTED_AGENT_TASK: AgentTask = Object.freeze({
+  id: "agent-reported",
+  taskId: TASK.id,
+  agentSnapshot: BUILDER,
+  kind: "direct",
+  status: "reported",
+  acceptance: "pending",
+  prompt: "执行任务",
+  output: "已报告结果",
+  createdAt: "2026-07-18T00:00:00.000Z",
+  updatedAt: "2026-07-18T00:01:00.000Z",
+  startedAt: "2026-07-18T00:00:00.000Z",
+  completedAt: "2026-07-18T00:01:00.000Z",
 });
 
 describe("Kanban automation interactions", () => {
@@ -75,6 +92,42 @@ describe("Kanban automation interactions", () => {
     })));
   });
 
+  it("opens a Pi-sourced task as an editable draft and preserves its source identity on save", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn(async () => undefined);
+    render(
+      <TaskEditorDialog
+        draft={{
+          title: "来自 Pi 的任务",
+          description: "仍可编辑的上下文",
+          acceptanceCriteria: "由用户补充",
+          priority: "medium",
+          sourcePiSessionPath: "C:/sessions/source.jsonl",
+          sourcePiSessionId: "source-session",
+        }}
+        project={PROJECT}
+        workflows={BUILTIN_ORCHESTRATION_CATALOG.workflows}
+        agents={BUILTIN_ORCHESTRATION_CATALOG.agents}
+        squads={[]}
+        busy={false}
+        onClose={() => undefined}
+        onCreate={onCreate}
+        onUpdate={async () => undefined}
+      />,
+    );
+
+    expect((screen.getByPlaceholderText("清楚描述要交付的结果") as HTMLInputElement).value).toBe("来自 Pi 的任务");
+    expect(screen.getByText("保存后只创建待规划任务，不会自动分发。来源 session identity 将随任务保存。")).toBeTruthy();
+    await user.clear(screen.getByPlaceholderText("清楚描述要交付的结果"));
+    await user.type(screen.getByPlaceholderText("清楚描述要交付的结果"), "用户确认后的任务");
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      title: "用户确认后的任务",
+      sourcePiSessionPath: "C:/sessions/source.jsonl",
+      sourcePiSessionId: "source-session",
+    })));
+  });
+
   it("sends a visible task comment from task detail", async () => {
     const user = userEvent.setup();
     const onAddComment = vi.fn(async () => undefined);
@@ -88,6 +141,7 @@ describe("Kanban automation interactions", () => {
         comments={[]}
         activities={[]}
         busy={false}
+        executionEnabled={true}
         onClose={() => undefined}
         onEdit={() => undefined}
         onDispatch={async () => undefined}
@@ -96,7 +150,9 @@ describe("Kanban automation interactions", () => {
         onAddComment={onAddComment}
         onMove={async () => undefined}
         onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
         onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
       />,
     );
 
@@ -104,6 +160,120 @@ describe("Kanban automation interactions", () => {
     await user.click(screen.getByRole("button", { name: "发送评论" }));
     await waitFor(() => expect(onAddComment).toHaveBeenCalledWith("请先读取现有测试"));
     expect((screen.getByPlaceholderText("补充上下文；用 @builder 或 @BUILD 可直接委派…") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("previews every AgentTask side effect before an @mention message is submitted", async () => {
+    const user = userEvent.setup();
+    const onAddComment = vi.fn(async () => undefined);
+    render(
+      <TaskDetailPanel
+        task={TASK}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={onAddComment}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
+        onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("补充上下文；用 @builder 或 @BUILD 可直接委派…"), "@builder 实现后交给 @VERIFY 验证");
+    expect(screen.getByRole("status").textContent).toContain("提交后将创建 2 个 AgentTask");
+    expect(screen.getByRole("status").textContent).toContain("实现工程师 (@builder)");
+    expect(screen.getByRole("status").textContent).toContain("验证工程师 (@tester)");
+    expect(onAddComment).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "发送评论" }));
+    await waitFor(() => expect(onAddComment).toHaveBeenCalledWith("@builder 实现后交给 @VERIFY 验证"));
+  });
+
+  it("continues only the explicitly selected task source session in Pi", async () => {
+    const user = userEvent.setup();
+    const onContinueInPi = vi.fn(async () => undefined);
+    render(
+      <TaskDetailPanel
+        task={{ ...TASK, sourcePiSessionPath: "C:/sessions/source.jsonl", sourcePiSessionId: "source" }}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={async () => undefined}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
+        onRevealPath={() => undefined}
+        onContinueInPi={onContinueInPi}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "在 Pi 中继续" }));
+    await waitFor(() => expect(onContinueInPi).toHaveBeenCalledWith("C:/sessions/source.jsonl"));
+  });
+
+  it("requires a reason and sends an explicit revision decision for a reported execution", async () => {
+    const user = userEvent.setup();
+    const onReviewExecution = vi.fn(async () => undefined);
+    render(
+      <TaskDetailPanel
+        task={TASK}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[REPORTED_AGENT_TASK]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={async () => undefined}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={onReviewExecution}
+        onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("执行 · 已报告")).toBeTruthy();
+    expect(screen.getByText("验收 · 待验收")).toBeTruthy();
+    const revision = screen.getByRole("button", { name: "请求修订" }) as HTMLButtonElement;
+    expect(revision.disabled).toBe(true);
+    await user.type(screen.getByPlaceholderText("接受可选填说明；请求修订或拒绝必须填写理由"), "补充安装验证");
+    expect(revision.disabled).toBe(false);
+    await user.click(revision);
+    await waitFor(() => expect(onReviewExecution).toHaveBeenCalledWith({
+      taskId: TASK.id,
+      executionKind: "agent-task",
+      executionId: REPORTED_AGENT_TASK.id,
+      decision: "revision-requested",
+      comment: "补充安装验证",
+    }));
   });
 
   it("creates a reusable Squad with an explicit Leader and selected members", async () => {

@@ -30,7 +30,8 @@ function withoutExecutableSearchPath(replacement: string): NodeJS.ProcessEnv {
 test("packaged app boots its bundled Pi RPC runtime", async ({}, testInfo) => {
   const executablePath = packagedExecutable();
   const required = process.env.npm_lifecycle_event === "test:packaged";
-  test.skip(!required && !executablePath, "没有待验证的本机安装包目录");
+  const explicitlySelected = typeof process.env.STELLA_PACKAGED_EXECUTABLE === "string";
+  test.skip(!required && !explicitlySelected, "打包冒烟仅由 test:packaged 或显式可执行文件触发");
   if (!executablePath) {
     throw new Error("找不到已打包应用；请先运行 npm run package:dir，或设置 STELLA_PACKAGED_EXECUTABLE");
   }
@@ -62,7 +63,19 @@ test("packaged app boots its bundled Pi RPC runtime", async ({}, testInfo) => {
     await expect(window.getByLabel(/Stella Pi Workbench/).first()).toBeVisible();
     await expect(window.getByRole("button", { name: "新建看板任务" })).toBeVisible();
     await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
+    await expect.poll(
+      () => window.evaluate(() => window.stella.capabilities().then((health) => health.pi.state)),
+      { timeout: 45_000, message: "bundled Pi capability should finish its independent startup" },
+    ).toBe("ready");
+    await expect.poll(
+      () => window.evaluate(() => window.stella.capabilities().then((health) => health.task.state)),
+      { timeout: 15_000, message: "Task Control capability should be ready" },
+    ).toBe("ready");
     expect(await window.evaluate(() => window.location.protocol)).toBe("file:");
+
+    await window.getByRole("button", { name: "新建任务", exact: true }).click();
+    await expect(window.getByRole("dialog", { name: "创建看板任务" })).toBeVisible();
+    await window.getByRole("button", { name: "取消", exact: true }).click();
 
     await window.getByRole("button", { name: "偏好设置", exact: true }).click();
     const settings = window.getByRole("dialog", { name: "偏好设置" });

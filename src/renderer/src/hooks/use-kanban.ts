@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import type { CapabilityState } from "@shared/capabilities";
 import type { BridgeEvent, StellaDesktopApi } from "@shared/contracts";
 import type {
   BoardBootstrap,
@@ -7,7 +8,8 @@ import type {
   CreateTaskInput,
   CreateTaskCommentInput,
   CreateSquadInput,
-  ManualTaskStatus,
+  ManualTaskStage,
+  ReviewExecutionInput,
   ResolveGateInput,
   UpdateTaskInput,
   UpdateAutopilotInput,
@@ -82,7 +84,7 @@ export interface KanbanController {
   readonly state: KanbanUiState;
   createTask(input: CreateTaskInput): Promise<BoardBootstrap>;
   updateTask(input: UpdateTaskInput): Promise<BoardBootstrap>;
-  moveTask(taskId: string, status: ManualTaskStatus): Promise<BoardBootstrap>;
+  moveTask(taskId: string, stage: ManualTaskStage): Promise<BoardBootstrap>;
   deleteTask(taskId: string): Promise<BoardBootstrap>;
   addComment(input: CreateTaskCommentInput): Promise<BoardBootstrap>;
   createSquad(input: CreateSquadInput): Promise<BoardBootstrap>;
@@ -94,16 +96,29 @@ export interface KanbanController {
   triggerAutopilot(autopilotId: string): Promise<BoardBootstrap>;
   dispatchTask(taskId: string): Promise<BoardBootstrap>;
   resolveGate(input: ResolveGateInput): Promise<BoardBootstrap>;
+  reviewExecution(input: ReviewExecutionInput): Promise<BoardBootstrap>;
   abortTask(taskId: string): Promise<BoardBootstrap>;
 }
 
 export function useKanban(api: StellaDesktopApi): KanbanController {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
+  const taskCapabilityState = useRef<CapabilityState | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
     const unsubscribe = api.onEvent((event: BridgeEvent) => {
-      if (!active || event.source !== "board") return;
+      if (!active) return;
+      if (event.source === "capability") {
+        const previous = taskCapabilityState.current;
+        const next = event.payload.snapshot.task.state;
+        taskCapabilityState.current = next;
+        if (next !== "ready" || previous === "ready") return;
+        void api.boardInitialize()
+          .then((bootstrap) => { if (active) dispatch({ type: "BOOTSTRAP", bootstrap }); })
+          .catch((error: unknown) => { if (active) dispatch({ type: "FAILED", error: errorMessage(error) }); });
+        return;
+      }
+      if (event.source !== "board") return;
       if (event.payload.type === "snapshot") dispatch({ type: "BOOTSTRAP", bootstrap: event.payload.bootstrap });
       else if (event.payload.type === "agent-event") dispatch({ type: "EVENT", event: event.payload });
       else if (event.payload.type === "agent-task-event") dispatch({ type: "AGENT_TASK_EVENT", event: event.payload });
@@ -135,7 +150,7 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
 
   const createTask = useCallback((input: CreateTaskInput) => perform("create", () => api.boardCreateTask(input)), [api, perform]);
   const updateTask = useCallback((input: UpdateTaskInput) => perform(input.taskId, () => api.boardUpdateTask(input)), [api, perform]);
-  const moveTask = useCallback((taskId: string, status: ManualTaskStatus) => perform(taskId, () => api.boardMoveTask(taskId, status)), [api, perform]);
+  const moveTask = useCallback((taskId: string, stage: ManualTaskStage) => perform(taskId, () => api.boardMoveTask(taskId, stage)), [api, perform]);
   const deleteTask = useCallback((taskId: string) => perform(taskId, () => api.boardDeleteTask(taskId)), [api, perform]);
   const addComment = useCallback((input: CreateTaskCommentInput) => perform(input.taskId, () => api.boardAddComment(input)), [api, perform]);
   const createSquad = useCallback((input: CreateSquadInput) => perform("squad:create", () => api.boardCreateSquad(input)), [api, perform]);
@@ -147,6 +162,7 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
   const triggerAutopilot = useCallback((autopilotId: string) => perform(`autopilot:${autopilotId}:trigger`, () => api.boardTriggerAutopilot(autopilotId)), [api, perform]);
   const dispatchTask = useCallback((taskId: string) => perform(taskId, () => api.boardDispatchTask(taskId)), [api, perform]);
   const resolveGate = useCallback((input: ResolveGateInput) => perform(input.taskId, () => api.boardResolveGate(input)), [api, perform]);
+  const reviewExecution = useCallback((input: ReviewExecutionInput) => perform(input.taskId, () => api.boardReviewExecution(input)), [api, perform]);
   const abortTask = useCallback((taskId: string) => perform(taskId, () => api.boardAbortTask(taskId)), [api, perform]);
 
   return useMemo(() => ({
@@ -165,6 +181,7 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
     triggerAutopilot,
     dispatchTask,
     resolveGate,
+    reviewExecution,
     abortTask,
-  }), [abortTask, addComment, createAutopilot, createSquad, createTask, deleteAutopilot, deleteSquad, deleteTask, dispatchTask, moveTask, resolveGate, state, triggerAutopilot, updateAutopilot, updateSquad, updateTask]);
+  }), [abortTask, addComment, createAutopilot, createSquad, createTask, deleteAutopilot, deleteSquad, deleteTask, dispatchTask, moveTask, resolveGate, reviewExecution, state, triggerAutopilot, updateAutopilot, updateSquad, updateTask]);
 }

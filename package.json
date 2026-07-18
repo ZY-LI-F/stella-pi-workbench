@@ -15,6 +15,9 @@
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "package:dir": "npm run build && electron-builder --config electron-builder.config.mjs --dir",
+    "package:dir:win:x64": "npm run build && electron-builder --config electron-builder.config.mjs --dir --win --x64",
+    "package:dir:mac:x64": "npm run build && electron-builder --config electron-builder.config.mjs --dir --mac --x64",
+    "package:dir:mac:arm64": "npm run build && electron-builder --config electron-builder.config.mjs --dir --mac --arm64",
     "dist": "npm run build && electron-builder --config electron-builder.config.mjs",
     "dist:win": "npm run build && electron-builder --config electron-builder.config.mjs --win nsis --x64",
     "dist:win:arm64": "npm run build && electron-builder --config electron-builder.config.mjs --win nsis --arm64",
@@ -26,6 +29,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:packaged": "playwright test tests/e2e/packaged.spec.ts",
+    "release:checksums": "node scripts/write-release-checksums.mjs",
     "check": "npm run typecheck && npm test"
   },
   "dependencies": {

@@ -1,39 +1,47 @@
-export const BOARD_SCHEMA_VERSION = 2 as const;
+export const BOARD_SCHEMA_VERSION = 3 as const;
+export const BOARD_SCHEMA_V2 = 2 as const;
 export const LEGACY_BOARD_SCHEMA_VERSION = 1 as const;
 
 export const TASK_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
-export const TASK_STATUSES = [
+const LEGACY_TASK_STATUSES = ["planned", "queued", "running", "review", "blocked", "failed", "interrupted", "completed"] as const;
+type LegacyTaskStatus = (typeof LEGACY_TASK_STATUSES)[number];
+const LEGACY_AGENT_TASK_STATUSES = ["queued", "running", "waiting_children", "succeeded", "failed", "interrupted", "cancelled"] as const;
+type LegacyAgentTaskStatus = (typeof LEGACY_AGENT_TASK_STATUSES)[number];
+const LEGACY_WORKFLOW_RUN_STATUSES = ["queued", "running", "review", "blocked", "failed", "interrupted", "completed"] as const;
+type LegacyWorkflowRunStatus = (typeof LEGACY_WORKFLOW_RUN_STATUSES)[number];
+
+export const TASK_STAGES = [
   "planned",
   "queued",
   "running",
   "review",
   "blocked",
-  "failed",
-  "interrupted",
   "completed",
 ] as const;
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+export type TaskStage = (typeof TASK_STAGES)[number];
 
 export const AGENT_TASK_STATUSES = [
   "queued",
   "running",
   "waiting_children",
-  "succeeded",
+  "reported",
   "failed",
   "interrupted",
   "cancelled",
 ] as const;
 export type AgentTaskStatus = (typeof AGENT_TASK_STATUSES)[number];
-export const TERMINAL_AGENT_TASK_STATUSES = ["succeeded", "failed", "interrupted", "cancelled"] as const;
+export const TERMINAL_AGENT_TASK_STATUSES = ["reported", "failed", "interrupted", "cancelled"] as const;
 
 export const BOARD_LANES = ["planned", "queued", "running", "review", "blocked", "completed"] as const;
 export type BoardLane = (typeof BOARD_LANES)[number];
-export type ManualTaskStatus = "planned" | "blocked" | "completed";
+export type ManualTaskStage = "planned" | "blocked" | "completed";
 
-export type WorkflowRunStatus = "queued" | "running" | "review" | "blocked" | "failed" | "interrupted" | "completed";
+export type WorkflowRunStatus = "queued" | "running" | "review" | "blocked" | "failed" | "interrupted" | "reported";
 export type StepRunStatus = "pending" | "running" | "waiting" | "succeeded" | "failed" | "interrupted";
+export const EXECUTION_ACCEPTANCE_STATUSES = ["not-ready", "pending", "accepted", "revision-requested", "rejected"] as const;
+export type ExecutionAcceptanceStatus = (typeof EXECUTION_ACCEPTANCE_STATUSES)[number];
 export type WorkspaceAccess = "read" | "write";
 export type AgentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -112,10 +120,12 @@ export interface KanbanTask {
   readonly projectName: string;
   readonly trusted: boolean;
   readonly executionTarget: ExecutionTarget;
-  readonly status: TaskStatus;
+  readonly stage: TaskStage;
   readonly activeRunId?: string;
   readonly activeAgentTaskId?: string;
   readonly blockedReason?: string;
+  readonly sourcePiSessionPath?: string;
+  readonly sourcePiSessionId?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -149,6 +159,9 @@ export interface WorkflowRun {
   readonly workflow: WorkflowDefinition;
   readonly agents: readonly AgentDefinition[];
   readonly status: WorkflowRunStatus;
+  readonly acceptance: ExecutionAcceptanceStatus;
+  readonly acceptanceComment?: string;
+  readonly reviewedAt?: string;
   readonly currentStepId?: string;
   readonly steps: readonly StepRun[];
   readonly startedAt: string;
@@ -181,15 +194,21 @@ export interface TaskActivity {
 }
 
 export type TaskCommentAuthor = "user" | "agent" | "system";
+export type TaskMessageKind = "comment" | "execution-report" | "acceptance";
 
-export interface TaskComment {
+export interface TaskMessage {
   readonly id: string;
   readonly taskId: string;
   readonly author: TaskCommentAuthor;
   readonly authorAgentId?: string;
+  readonly messageKind?: TaskMessageKind;
+  readonly runId?: string;
+  readonly agentTaskId?: string;
   readonly body: string;
   readonly createdAt: string;
 }
+
+export type TaskComment = TaskMessage;
 
 export type AgentTaskKind = "direct" | "mention-root" | "squad-leader" | "delegated";
 
@@ -199,6 +218,9 @@ export interface AgentTask {
   readonly agentSnapshot: AgentDefinition;
   readonly kind: AgentTaskKind;
   readonly status: AgentTaskStatus;
+  readonly acceptance: ExecutionAcceptanceStatus;
+  readonly acceptanceComment?: string;
+  readonly reviewedAt?: string;
   readonly prompt: string;
   readonly parentAgentTaskId?: string;
   readonly squadId?: string;
@@ -330,6 +352,8 @@ export interface CreateTaskInput {
   readonly projectName: string;
   readonly trusted: boolean;
   readonly executionTarget: ExecutionTarget;
+  readonly sourcePiSessionPath?: string;
+  readonly sourcePiSessionId?: string;
 }
 
 export interface UpdateTaskInput {
@@ -385,6 +409,21 @@ export interface ResolveGateInput {
   readonly comment: string;
 }
 
+export type ExecutionReviewDecision = "accept" | "revision-requested" | "reject";
+
+export interface ReviewExecutionInput {
+  readonly taskId: string;
+  readonly executionKind: "workflow" | "agent-task";
+  readonly executionId: string;
+  readonly decision: ExecutionReviewDecision;
+  readonly comment: string;
+}
+
+export interface OpenTaskSessionInput {
+  readonly taskId: string;
+  readonly sessionPath: string;
+}
+
 export const EMPTY_BOARD_STATE: BoardState = Object.freeze({
   version: BOARD_SCHEMA_VERSION,
   tasks: Object.freeze([]),
@@ -397,16 +436,15 @@ export const EMPTY_BOARD_STATE: BoardState = Object.freeze({
   autopilotRuns: Object.freeze([]),
 });
 
-const MANUAL_STATUSES = new Set<TaskStatus>(["planned", "blocked", "completed"]);
+const MANUAL_STAGES = new Set<TaskStage>(["planned", "blocked", "completed"]);
 const TERMINAL_AGENT_TASK_SET = new Set<AgentTaskStatus>(TERMINAL_AGENT_TASK_STATUSES);
 
-export function boardLaneForStatus(status: TaskStatus): BoardLane {
-  if (status === "failed" || status === "interrupted") return "blocked";
-  return status;
+export function boardLaneForStage(stage: TaskStage): BoardLane {
+  return stage;
 }
 
-export function canMoveTaskManually(task: KanbanTask, next: TaskStatus): next is ManualTaskStatus {
-  return task.activeRunId === undefined && task.activeAgentTaskId === undefined && MANUAL_STATUSES.has(next);
+export function canMoveTaskManually(task: KanbanTask, next: TaskStage): next is ManualTaskStage {
+  return task.activeRunId === undefined && task.activeAgentTaskId === undefined && MANUAL_STAGES.has(next);
 }
 
 export function workflowProgress(run: WorkflowRun | undefined): number {
@@ -532,11 +570,12 @@ function assertTaskBase(value: Record<string, unknown>, path: string): void {
   assertString(value.description, `${path}.description`, true);
   assertString(value.acceptanceCriteria, `${path}.acceptanceCriteria`, true);
   assertOneOf(value.priority, TASK_PRIORITIES, `${path}.priority`);
-  assertOneOf(value.status, TASK_STATUSES, `${path}.status`);
   if (typeof value.trusted !== "boolean") throw new Error(`${path}.trusted 必须是布尔值`);
   assertOptionalString(value.activeRunId, `${path}.activeRunId`);
   assertOptionalString(value.activeAgentTaskId, `${path}.activeAgentTaskId`);
   assertOptionalString(value.blockedReason, `${path}.blockedReason`);
+  assertOptionalString(value.sourcePiSessionPath, `${path}.sourcePiSessionPath`);
+  assertOptionalString(value.sourcePiSessionId, `${path}.sourcePiSessionId`);
   assertIsoDate(value.createdAt, `${path}.createdAt`);
   assertIsoDate(value.updatedAt, `${path}.updatedAt`);
 }
@@ -544,6 +583,7 @@ function assertTaskBase(value: Record<string, unknown>, path: string): void {
 function assertTask(value: unknown, path: string): asserts value is KanbanTask {
   if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
   assertTaskBase(value, path);
+  assertOneOf(value.stage, TASK_STAGES, `${path}.stage`);
   assertExecutionTarget(value.executionTarget, `${path}.executionTarget`);
   if (value.activeRunId !== undefined && value.activeAgentTaskId !== undefined) {
     throw new Error(`${path} 不能同时拥有 activeRunId 和 activeAgentTaskId`);
@@ -553,6 +593,7 @@ function assertTask(value: unknown, path: string): asserts value is KanbanTask {
 function assertLegacyTask(value: unknown, path: string): asserts value is Record<string, unknown> & { readonly workflowId: string } {
   if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
   assertTaskBase(value, path);
+  assertOneOf(value.status, LEGACY_TASK_STATUSES, `${path}.status`);
   assertString(value.workflowId, `${path}.workflowId`);
   if (value.activeAgentTaskId !== undefined) throw new Error(`${path}.activeAgentTaskId 不属于 schema v1`);
 }
@@ -585,13 +626,35 @@ function assertRun(value: unknown, path: string): asserts value is WorkflowRun {
   assertWorkflow(value.workflow, `${path}.workflow`);
   if (!Array.isArray(value.agents)) throw new Error(`${path}.agents 必须是数组`);
   value.agents.forEach((agent, index) => assertAgent(agent, `${path}.agents[${index}]`));
-  assertOneOf(value.status, ["queued", "running", "review", "blocked", "failed", "interrupted", "completed"] as const, `${path}.status`);
+  assertOneOf(value.status, ["queued", "running", "review", "blocked", "failed", "interrupted", "reported"] as const, `${path}.status`);
+  assertOneOf(value.acceptance, EXECUTION_ACCEPTANCE_STATUSES, `${path}.acceptance`);
+  assertOptionalString(value.acceptanceComment, `${path}.acceptanceComment`);
+  assertOptionalIsoDate(value.reviewedAt, `${path}.reviewedAt`);
   assertOptionalString(value.currentStepId, `${path}.currentStepId`);
   if (!Array.isArray(value.steps)) throw new Error(`${path}.steps 必须是数组`);
   value.steps.forEach((step, index) => assertStepRun(step, `${path}.steps[${index}]`));
   assertIsoDate(value.startedAt, `${path}.startedAt`);
   assertIsoDate(value.updatedAt, `${path}.updatedAt`);
   assertOptionalIsoDate(value.completedAt, `${path}.completedAt`);
+  assertExecutionAcceptance(value, path);
+}
+
+function assertExecutionAcceptance(value: Record<string, unknown>, path: string): void {
+  const status = value.status;
+  const acceptance = value.acceptance;
+  const reviewed = acceptance === "accepted" || acceptance === "revision-requested" || acceptance === "rejected";
+  if (status !== "reported" && acceptance !== "not-ready") {
+    throw new Error(`${path}.acceptance 只有 reported 执行可以进入验收`);
+  }
+  if (status === "reported" && acceptance !== "pending" && !reviewed) {
+    throw new Error(`${path}.acceptance 必须等待或记录验收结论`);
+  }
+  if (reviewed && !value.reviewedAt) throw new Error(`${path}.reviewedAt 是验收结论的必填字段`);
+  if (!reviewed && value.reviewedAt !== undefined) throw new Error(`${path}.reviewedAt 只允许已验收执行使用`);
+  if (!reviewed && value.acceptanceComment !== undefined) throw new Error(`${path}.acceptanceComment 只允许已验收执行使用`);
+  if ((acceptance === "revision-requested" || acceptance === "rejected") && !value.acceptanceComment) {
+    throw new Error(`${path}.acceptanceComment 是修订或拒绝的必填字段`);
+  }
 }
 
 function assertActivity(value: unknown, path: string): asserts value is TaskActivity {
@@ -613,6 +676,9 @@ function assertComment(value: unknown, path: string): asserts value is TaskComme
   assertString(value.taskId, `${path}.taskId`);
   assertOneOf(value.author, ["user", "agent", "system"] as const, `${path}.author`);
   assertOptionalString(value.authorAgentId, `${path}.authorAgentId`);
+  if (value.messageKind !== undefined) assertOneOf(value.messageKind, ["comment", "execution-report", "acceptance"] as const, `${path}.messageKind`);
+  assertOptionalString(value.runId, `${path}.runId`);
+  assertOptionalString(value.agentTaskId, `${path}.agentTaskId`);
   assertString(value.body, `${path}.body`);
   assertIsoDate(value.createdAt, `${path}.createdAt`);
   if (value.author === "agent" && !value.authorAgentId) throw new Error(`${path}.authorAgentId 是 Agent 评论的必填字段`);
@@ -626,6 +692,9 @@ function assertAgentTask(value: unknown, path: string): asserts value is AgentTa
   assertAgent(value.agentSnapshot, `${path}.agentSnapshot`);
   assertOneOf(value.kind, ["direct", "mention-root", "squad-leader", "delegated"] as const, `${path}.kind`);
   assertOneOf(value.status, AGENT_TASK_STATUSES, `${path}.status`);
+  assertOneOf(value.acceptance, EXECUTION_ACCEPTANCE_STATUSES, `${path}.acceptance`);
+  assertOptionalString(value.acceptanceComment, `${path}.acceptanceComment`);
+  assertOptionalIsoDate(value.reviewedAt, `${path}.reviewedAt`);
   assertString(value.prompt, `${path}.prompt`);
   assertOptionalString(value.parentAgentTaskId, `${path}.parentAgentTaskId`);
   assertOptionalString(value.squadId, `${path}.squadId`);
@@ -646,6 +715,9 @@ function assertAgentTask(value: unknown, path: string): asserts value is AgentTa
   }
   if (value.kind === "delegated" && !value.parentAgentTaskId) throw new Error(`${path}.parentAgentTaskId 是 delegated 任务的必填字段`);
   if (value.kind === "squad-leader" && !value.squadId) throw new Error(`${path}.squadId 是 Squad Leader 的必填字段`);
+  const isRoot = value.parentAgentTaskId === undefined;
+  if (!isRoot && value.acceptance !== "not-ready") throw new Error(`${path}.acceptance 只允许根 AgentTask 使用`);
+  if (isRoot) assertExecutionAcceptance(value, path);
 }
 
 function assertSquad(value: unknown, path: string): asserts value is Squad {
@@ -816,6 +888,14 @@ function validateReferences(state: BoardState): void {
 
   for (const comment of state.comments) {
     if (!taskIds.has(comment.taskId)) throw new Error(`评论 ${comment.id} 引用了未知任务`);
+    if (comment.runId) {
+      const run = runsById.get(comment.runId);
+      if (!run || run.taskId !== comment.taskId) throw new Error(`消息 ${comment.id} 的 runId 无效`);
+    }
+    if (comment.agentTaskId) {
+      const agentTask = agentTasksById.get(comment.agentTaskId);
+      if (!agentTask || agentTask.taskId !== comment.taskId) throw new Error(`消息 ${comment.id} 的 agentTaskId 无效`);
+    }
   }
 
   for (const agentTask of state.agentTasks) {
@@ -912,6 +992,64 @@ export function parseBoardState(value: unknown): BoardState {
   return state;
 }
 
+function stageFromLegacyStatus(status: LegacyTaskStatus): TaskStage {
+  if (status === "failed" || status === "interrupted") return "blocked";
+  return status;
+}
+
+function migrateV2Run(value: unknown, path: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
+  assertOneOf(value.status, LEGACY_WORKFLOW_RUN_STATUSES, `${path}.status`);
+  const status = value.status as LegacyWorkflowRunStatus;
+  return {
+    ...value,
+    status: status === "completed" ? "reported" : status,
+    acceptance: status === "completed" ? "pending" : "not-ready",
+  };
+}
+
+function migrateV2AgentTask(value: unknown, path: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
+  assertOneOf(value.status, LEGACY_AGENT_TASK_STATUSES, `${path}.status`);
+  const status = value.status as LegacyAgentTaskStatus;
+  const root = value.parentAgentTaskId === undefined;
+  return {
+    ...value,
+    status: status === "succeeded" ? "reported" : status,
+    acceptance: status === "succeeded" && root ? "pending" : "not-ready",
+  };
+}
+
+export function migrateBoardStateV2(value: unknown): BoardState {
+  if (!isRecord(value)) throw new Error("schema v2 看板文件根节点必须是对象");
+  if (value.version !== BOARD_SCHEMA_V2) throw new Error(`无法从版本 ${String(value.version)} 迁移看板`);
+  const collections = ["tasks", "runs", "activities", "comments", "agentTasks", "squads", "autopilots", "autopilotRuns"] as const;
+  for (const collection of collections) {
+    if (!Array.isArray(value[collection])) throw new Error(`schema v2 看板文件缺少 ${collection} 数组`);
+  }
+
+  const tasks = (value.tasks as unknown[]).map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error(`tasks[${index}] 必须是对象`);
+    assertTaskBase(candidate, `tasks[${index}]`);
+    assertOneOf(candidate.status, LEGACY_TASK_STATUSES, `tasks[${index}].status`);
+    assertExecutionTarget(candidate.executionTarget, `tasks[${index}].executionTarget`);
+    const { status, ...task } = candidate;
+    return { ...task, stage: stageFromLegacyStatus(status as LegacyTaskStatus) };
+  });
+
+  return parseBoardState({
+    version: BOARD_SCHEMA_VERSION,
+    tasks,
+    runs: (value.runs as unknown[]).map((run, index) => migrateV2Run(run, `runs[${index}]`)),
+    activities: value.activities,
+    comments: value.comments,
+    agentTasks: (value.agentTasks as unknown[]).map((task, index) => migrateV2AgentTask(task, `agentTasks[${index}]`)),
+    squads: value.squads,
+    autopilots: value.autopilots,
+    autopilotRuns: value.autopilotRuns,
+  });
+}
+
 export function migrateBoardStateV1(value: unknown): BoardState {
   if (!isRecord(value)) throw new Error("schema v1 看板文件根节点必须是对象");
   if (value.version !== LEGACY_BOARD_SCHEMA_VERSION) throw new Error(`无法从版本 ${String(value.version)} 迁移看板`);
@@ -919,7 +1057,6 @@ export function migrateBoardStateV1(value: unknown): BoardState {
     throw new Error("schema v1 看板文件缺少 tasks、runs 或 activities 数组");
   }
   value.tasks.forEach((task, index) => assertLegacyTask(task, `tasks[${index}]`));
-  value.runs.forEach((run, index) => assertRun(run, `runs[${index}]`));
   value.activities.forEach((activity, index) => assertActivity(activity, `activities[${index}]`));
 
   const migratedTasks = value.tasks.map((legacy) => {
@@ -934,7 +1071,7 @@ export function migrateBoardStateV1(value: unknown): BoardState {
       projectName: task.projectName,
       trusted: task.trusted,
       executionTarget: { kind: "workflow", workflowId: task.workflowId },
-      status: task.status,
+      stage: stageFromLegacyStatus(task.status as LegacyTaskStatus),
       activeRunId: task.activeRunId,
       blockedReason: task.blockedReason,
       createdAt: task.createdAt,
@@ -945,7 +1082,7 @@ export function migrateBoardStateV1(value: unknown): BoardState {
   return parseBoardState({
     version: BOARD_SCHEMA_VERSION,
     tasks: migratedTasks,
-    runs: value.runs,
+    runs: value.runs.map((run, index) => migrateV2Run(run, `runs[${index}]`)),
     activities: value.activities,
     comments: [],
     agentTasks: [],
@@ -957,12 +1094,15 @@ export function migrateBoardStateV1(value: unknown): BoardState {
 
 export interface ParsedBoardFile {
   readonly state: BoardState;
-  readonly migratedFrom?: typeof LEGACY_BOARD_SCHEMA_VERSION;
+  readonly migratedFrom?: typeof LEGACY_BOARD_SCHEMA_VERSION | typeof BOARD_SCHEMA_V2;
 }
 
 export function parseBoardFile(value: unknown): ParsedBoardFile {
   if (!isRecord(value)) throw new Error("看板文件根节点必须是对象");
   if (value.version === BOARD_SCHEMA_VERSION) return Object.freeze({ state: parseBoardState(value) });
+  if (value.version === BOARD_SCHEMA_V2) {
+    return Object.freeze({ state: migrateBoardStateV2(value), migratedFrom: BOARD_SCHEMA_V2 });
+  }
   if (value.version === LEGACY_BOARD_SCHEMA_VERSION) {
     return Object.freeze({ state: migrateBoardStateV1(value), migratedFrom: LEGACY_BOARD_SCHEMA_VERSION });
   }

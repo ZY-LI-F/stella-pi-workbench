@@ -1,19 +1,44 @@
 import { useMemo, useState } from "react";
-import { Ban, Bot, Check, Clipboard, ExternalLink, MessageCircle, Pencil, Play, RotateCcw, Send, Trash2, X, XCircle } from "lucide-react";
+import {
+  BadgeCheck,
+  Ban,
+  Bot,
+  Check,
+  ExternalLink,
+  FileOutput,
+  Flag,
+  GitBranch,
+  MessageCircle,
+  MessagesSquare,
+  Pencil,
+  Play,
+  Radio,
+  RotateCcw,
+  Send,
+  Trash2,
+  UserRound,
+  X,
+  XCircle,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { availableMentionAgentsForTask, parseAgentMentions } from "@shared/agent-mentions";
 import type {
-  KanbanTask,
   AgentTask,
-  ManualTaskStatus,
+  KanbanTask,
+  ManualTaskStage,
   OrchestrationCatalog,
+  ReviewExecutionInput,
   ResolveGateInput,
   Squad,
   TaskActivity,
   TaskComment,
   WorkflowRun,
 } from "@shared/kanban";
-import { PRIORITY_LABEL, STATUS_LABEL, formatRelativeTime } from "./kanban-format";
+import { projectTaskTimeline, type TaskTimelineEntry, type TaskTimelineKind } from "@shared/task-timeline";
+import { ACCEPTANCE_LABEL, EXECUTION_STATUS_LABEL, PRIORITY_LABEL, STAGE_LABEL, formatRelativeTime } from "./kanban-format";
+import { ArtifactDetails } from "./ArtifactDetails";
+import { WorkflowDag } from "./WorkflowDag";
 
 interface TaskDetailPanelProps {
   readonly task: KanbanTask;
@@ -24,15 +49,48 @@ interface TaskDetailPanelProps {
   readonly comments: readonly TaskComment[];
   readonly activities: readonly TaskActivity[];
   readonly busy: boolean;
+  readonly executionEnabled: boolean;
   readonly onClose: () => void;
   readonly onEdit: () => void;
   readonly onDispatch: () => Promise<void>;
   readonly onAbort: () => Promise<void>;
   readonly onDelete: () => Promise<void>;
   readonly onAddComment: (body: string) => Promise<void>;
-  readonly onMove: (status: ManualTaskStatus) => Promise<void>;
+  readonly onMove: (stage: ManualTaskStage) => Promise<void>;
   readonly onResolveGate: (input: ResolveGateInput) => Promise<void>;
+  readonly onReviewExecution: (input: ReviewExecutionInput) => Promise<void>;
   readonly onRevealPath: (path: string) => void;
+  readonly onContinueInPi: (sessionPath: string) => Promise<void>;
+}
+
+interface MentionPreview {
+  readonly agents: readonly { readonly id: string; readonly name: string }[];
+  readonly error?: string;
+}
+
+function timelineIcon(kind: TaskTimelineKind) {
+  switch (kind) {
+    case "goal": return <Flag size={13} />;
+    case "user-message": return <UserRound size={13} />;
+    case "agent-output": return <Bot size={13} />;
+    case "dispatch-receipt": return <Radio size={13} />;
+    case "execution": return <GitBranch size={13} />;
+    case "artifact": return <FileOutput size={13} />;
+    case "review": return <BadgeCheck size={13} />;
+    default: return <MessageCircle size={13} />;
+  }
+}
+
+function TimelineProvenance({ entry }: { readonly entry: TaskTimelineEntry }) {
+  const { provenance } = entry;
+  return (
+    <div className="task-room-entry__provenance" aria-label="事实来源">
+      <span>{provenance.source}</span>
+      {provenance.runId && <code title={provenance.runId}>RUN {provenance.runId.slice(0, 8)}</code>}
+      {provenance.stepId && <code title={provenance.stepId}>STEP {provenance.stepId.slice(0, 8)}</code>}
+      {provenance.agentTaskId && <code title={provenance.agentTaskId}>AGENTTASK {provenance.agentTaskId.slice(0, 8)}</code>}
+    </div>
+  );
 }
 
 export function TaskDetailPanel({
@@ -44,6 +102,7 @@ export function TaskDetailPanel({
   comments,
   activities,
   busy,
+  executionEnabled,
   onClose,
   onEdit,
   onDispatch,
@@ -52,13 +111,24 @@ export function TaskDetailPanel({
   onAddComment,
   onMove,
   onResolveGate,
+  onReviewExecution,
   onRevealPath,
+  onContinueInPi,
 }: TaskDetailPanelProps) {
   const [gateComment, setGateComment] = useState("");
   const [commentBody, setCommentBody] = useState("");
+  const [reviewComment, setReviewComment] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
-  const run = useMemo(() => runs.find((candidate) => candidate.id === task.activeRunId) ?? runs[0], [runs, task.activeRunId]);
+  const timeline = useMemo(
+    () => projectTaskTimeline({ task, comments, activities, runs, agentTasks }),
+    [activities, agentTasks, comments, runs, task],
+  );
+  const run = useMemo(
+    () => runs.find((candidate) => candidate.id === task.activeRunId)
+      ?? [...runs].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0],
+    [runs, task.activeRunId],
+  );
   const currentGate = run?.status === "review" && run.currentStepId
     ? run.steps.find((step) => step.stepId === run.currentStepId && step.stepKind === "human-gate" && step.status === "waiting")
     : undefined;
@@ -71,8 +141,33 @@ export function TaskDetailPanel({
     : executionTarget.kind === "agent"
       ? catalog.agents.find((agent) => agent.id === executionTarget.agentId)?.name ?? executionTarget.agentId
       : squads.find((squad) => squad.id === executionTarget.squadId)?.name ?? executionTarget.squadId;
-  const isRedispatch = task.status === "failed" || task.status === "interrupted" || task.status === "blocked";
+  const isRedispatch = task.stage === "blocked";
   const activeAgentTask = agentTasks.find((candidate) => candidate.id === task.activeAgentTaskId);
+  const rootAgentTask = [...agentTasks].reverse().find((candidate) => !candidate.parentAgentTaskId);
+  const executionTruth = [
+    ...(run ? [{ kind: "workflow" as const, execution: run }] : []),
+    ...(rootAgentTask ? [{ kind: "agent-task" as const, execution: rootAgentTask }] : []),
+  ].sort((left, right) => Date.parse(right.execution.updatedAt) - Date.parse(left.execution.updatedAt))[0];
+  const reviewTarget = [
+    ...runs.filter((candidate) => candidate.status === "reported" && candidate.acceptance === "pending").map((execution) => ({ kind: "workflow" as const, execution })),
+    ...agentTasks.filter((candidate) => !candidate.parentAgentTaskId && candidate.status === "reported" && candidate.acceptance === "pending").map((execution) => ({ kind: "agent-task" as const, execution })),
+  ].sort((left, right) => Date.parse(right.execution.updatedAt) - Date.parse(left.execution.updatedAt))[0];
+  const mentionPreview = useMemo<MentionPreview>(() => {
+    if (!commentBody.trim()) return Object.freeze({ agents: Object.freeze([]) });
+    try {
+      const availableAgents = availableMentionAgentsForTask(task, catalog, squads);
+      const agents = parseAgentMentions(commentBody, availableAgents).agents.map((agent) => Object.freeze({ id: agent.id, name: agent.name }));
+      if (agents.length > 0 && (task.activeRunId || task.activeAgentTaskId)) {
+        return Object.freeze({ agents: Object.freeze(agents), error: "任务正在执行；请先中止或等待完成后再使用 @mention 分发" });
+      }
+      if (agents.length > 0 && task.stage === "completed") {
+        return Object.freeze({ agents: Object.freeze(agents), error: "已完成任务需先移回待规划列才能使用 @mention 分发" });
+      }
+      return Object.freeze({ agents: Object.freeze(agents) });
+    } catch (cause) {
+      return Object.freeze({ agents: Object.freeze([]), error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, [catalog, commentBody, squads, task]);
 
   const perform = async (action: () => Promise<void>) => {
     setError("");
@@ -83,116 +178,106 @@ export function TaskDetailPanel({
     }
   };
 
+  const isReviewEntry = (entry: TaskTimelineEntry) => Boolean(reviewTarget)
+    && entry.kind === "execution"
+    && entry.provenance.sourceId === reviewTarget?.execution.id
+    && entry.provenance.source === (reviewTarget?.kind === "workflow" ? "workflow-run" : "agent-task");
+
   return (
     <aside className="task-detail" aria-label={`任务详情：${task.title}`}>
       <header className="task-detail__header">
-        <div><small>MISSION DETAIL</small><h2>{task.title}</h2></div>
+        <div><small>TASK ROOM</small><h2>{task.title}</h2></div>
         <button type="button" className="icon-button" aria-label="关闭任务详情" onClick={onClose}><X size={17} /></button>
       </header>
 
       <div className="task-detail__scroll">
         <div className="task-detail__badges">
-          <span className={`status-chip status-chip--${task.status}`}>{STATUS_LABEL[task.status]}</span>
+          <span className={`status-chip status-chip--${task.stage}`}>任务 · {STAGE_LABEL[task.stage]}</span>
           <span className={`priority-badge priority-badge--${task.priority}`}>{PRIORITY_LABEL[task.priority]}优先级</span>
           <span>{executionLabel}</span>
         </div>
-
-        <section className="task-detail__section task-detail__copy">
-          <h3>任务说明</h3>
-          <p>{task.description || "未填写补充说明。"}</p>
-          <h3>验收标准</h3>
-          <p>{task.acceptanceCriteria || "未填写补充标准。"}</p>
-          {task.blockedReason && <div className="task-detail__blocked"><XCircle size={14} /><span>{task.blockedReason}</span></div>}
-        </section>
-
-        {currentGate && (
-          <section className="human-gate-card">
-            <small>HUMAN GATE</small>
-            <h3>{currentGate.name}</h3>
-            <p>{run?.workflow.steps.find((step) => step.id === currentGate.stepId && step.kind === "human-gate")?.summary}</p>
-            <textarea value={gateComment} onChange={(event) => setGateComment(event.target.value)} rows={3} placeholder="填写批准说明或驳回原因（可选）" />
-            <div>
-              <button type="button" className="button-danger-soft" disabled={busy} onClick={() => void perform(() => onResolveGate({ taskId: task.id, decision: "reject", comment: gateComment }))}><X size={14} />驳回</button>
-              <button type="button" className="button-primary" disabled={busy} onClick={() => void perform(() => onResolveGate({ taskId: task.id, decision: "approve", comment: gateComment }))}><Check size={14} />批准并继续</button>
-            </div>
-          </section>
+        {executionTruth && (
+          <div className="task-detail__execution-truth">
+            <span className={`execution-chip execution-chip--${executionTruth.execution.status}`}>执行 · {EXECUTION_STATUS_LABEL[executionTruth.execution.status] ?? executionTruth.execution.status}</span>
+            <span className={`acceptance-chip acceptance-chip--${executionTruth.execution.acceptance}`}>验收 · {ACCEPTANCE_LABEL[executionTruth.execution.acceptance]}</span>
+          </div>
         )}
+        {task.blockedReason && <div className="task-detail__blocked"><XCircle size={14} /><span>{task.blockedReason}</span></div>}
 
-        {run && (
-          <section className="task-detail__section">
-            <div className="section-title"><div><small>RUN {run.id.slice(0, 8)}</small><h3>流程轨迹</h3></div><span>{run.workflow.name}</span></div>
-            <div className="run-timeline">
-              {run.steps.map((step, index) => {
-                const agent = step.agentId ? run.agents.find((candidate) => candidate.id === step.agentId) : undefined;
-                return (
-                  <div className={`run-step run-step--${step.status}`} key={step.id}>
-                    <span className="run-step__marker">{step.status === "succeeded" ? <Check size={12} /> : index + 1}</span>
-                    <div className="run-step__body">
-                      <div><strong>{step.name}</strong><small>{agent?.name ?? "人工关卡"}</small><em>{step.status}</em></div>
-                      {step.error && <p className="run-step__error">{step.error}</p>}
-                      {step.artifact && (
-                        <details className="artifact-card">
-                          <summary>{step.artifact.title}<span>查看产物</span></summary>
-                          <div className="artifact-card__actions">
-                            <button type="button" onClick={() => void navigator.clipboard.writeText(step.artifact?.content ?? "")}><Clipboard size={12} />复制</button>
-                            {step.artifact.sessionPath && <button type="button" onClick={() => onRevealPath(step.artifact?.sessionPath ?? "")}><ExternalLink size={12} />会话文件</button>}
-                          </div>
-                          <div className="artifact-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{step.artifact.content}</ReactMarkdown></div>
-                          {(step.artifact.inputTokens !== undefined || step.artifact.outputTokens !== undefined) && <footer>{step.artifact.inputTokens ?? 0} 输入 · {step.artifact.outputTokens ?? 0} 输出{step.artifact.cost !== undefined ? ` · $${step.artifact.cost.toFixed(4)}` : ""}</footer>}
-                        </details>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        )}
+        <WorkflowDag
+          workflowExpected={executionTarget.kind === "workflow"}
+          runs={runs}
+          busy={busy}
+          executionEnabled={executionEnabled}
+          onRevealPath={onRevealPath}
+          onContinueInPi={onContinueInPi}
+          onError={setError}
+        />
 
-        {agentTasks.length > 0 && (
-          <section className="task-detail__section agent-task-section">
-            <div className="section-title"><div><small>AGENT TASK QUEUE</small><h3>执行轨迹</h3></div><span>{agentTasks.length} 次</span></div>
-            <div className="agent-task-timeline">
-              {agentTasks.map((agentTask) => (
-                <article className={`agent-task-node agent-task-node--${agentTask.status} ${agentTask.parentAgentTaskId ? "is-child" : ""}`} key={agentTask.id}>
-                  <span className="agent-task-node__pulse"><Bot size={13} /></span>
-                  <div className="agent-task-node__body">
-                    <header>
-                      <div><small>{agentTask.kind.replace("-", " ")}</small><strong>{agentTask.agentSnapshot.name}</strong></div>
-                      <em>{agentTask.status}</em>
-                    </header>
-                    <p>@{agentTask.agentSnapshot.id} · {agentTask.agentSnapshot.workspaceAccess === "write" ? "可写工作区" : "只读工作区"}</p>
-                    {agentTask.error && <div className="agent-task-node__error"><XCircle size={12} />{agentTask.error}</div>}
-                    {agentTask.output && (
-                      <details className="artifact-card">
-                        <summary>Agent 最终产物<span>查看输出</span></summary>
-                        <div className="artifact-card__actions">
-                          <button type="button" onClick={() => void navigator.clipboard.writeText(agentTask.output ?? "")}><Clipboard size={12} />复制</button>
-                          {agentTask.sessionPath && <button type="button" onClick={() => onRevealPath(agentTask.sessionPath ?? "")}><ExternalLink size={12} />会话文件</button>}
-                        </div>
-                        <div className="artifact-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{agentTask.output}</ReactMarkdown></div>
-                        {(agentTask.inputTokens !== undefined || agentTask.outputTokens !== undefined) && <footer>{agentTask.inputTokens ?? 0} 输入 · {agentTask.outputTokens ?? 0} 输出{agentTask.cost !== undefined ? ` · $${agentTask.cost.toFixed(4)}` : ""}</footer>}
-                      </details>
+        <section className="task-room" aria-label="任务事实时间线">
+          <header className="task-room__header">
+            <div><small>TASK ROOM TIMELINE</small><h3>任务事实流</h3></div>
+            <span>{timeline.length} 条</span>
+          </header>
+          <div className="task-room__timeline">
+            {timeline.map((entry) => (
+              <div className="task-room-entry-wrap" key={entry.id}>
+                <article className={`task-room-entry task-room-entry--${entry.kind}`} data-source-id={entry.provenance.sourceId}>
+                  <span className="task-room-entry__marker" aria-hidden="true">{timelineIcon(entry.kind)}</span>
+                  <div className="task-room-entry__body">
+                    <header><strong>{entry.title}</strong><time dateTime={entry.createdAt}>{formatRelativeTime(entry.createdAt)}</time></header>
+                    {entry.detail && <small className="task-room-entry__detail">{entry.detail}</small>}
+                    {entry.body && (entry.kind === "agent-output"
+                      ? <div className="artifact-markdown task-room-entry__markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.body}</ReactMarkdown></div>
+                      : <p>{entry.body}</p>)}
+                    {(entry.status || entry.acceptance) && (
+                      <div className="task-room-entry__truth">
+                        {entry.status && <span className={`execution-chip execution-chip--${entry.status}`}>{EXECUTION_STATUS_LABEL[entry.status] ?? entry.status}</span>}
+                        {entry.acceptance && <span className={`acceptance-chip acceptance-chip--${entry.acceptance}`}>{ACCEPTANCE_LABEL[entry.acceptance]}</span>}
+                      </div>
                     )}
+                    {entry.artifact && <ArtifactDetails artifact={entry.artifact} onRevealPath={onRevealPath} />}
+                    {entry.sessionPath && (
+                      <div className="task-room-entry__session-actions">
+                        <button type="button" className="button-secondary" onClick={() => onRevealPath(entry.sessionPath ?? "")}><ExternalLink size={12} />文件位置</button>
+                        <button type="button" className="button-secondary" disabled={!executionEnabled || busy} onClick={() => void perform(() => onContinueInPi(entry.sessionPath ?? ""))}><MessagesSquare size={12} />在 Pi 中继续</button>
+                      </div>
+                    )}
+                    <TimelineProvenance entry={entry} />
                   </div>
                 </article>
-              ))}
-            </div>
-          </section>
-        )}
 
-        <section className="task-detail__section task-comments">
-          <div className="section-title"><div><small>MISSION DISCUSSION</small><h3>任务讨论</h3></div><span>{comments.length}</span></div>
-          <div className="task-comments__list">
-            {comments.map((comment) => (
-              <article className={`task-comment task-comment--${comment.author}`} key={comment.id}>
-                <span>{comment.author === "user" ? <MessageCircle size={12} /> : <Bot size={12} />}</span>
-                <div><header><strong>{comment.author === "user" ? "你" : comment.author === "agent" ? `@${comment.authorAgentId}` : "Stella"}</strong><small>{formatRelativeTime(comment.createdAt)}</small></header><p>{comment.body}</p></div>
-              </article>
+                {currentGate && entry.provenance.source === "workflow-step" && entry.provenance.sourceId === currentGate.id && (
+                  <section className="human-gate-card task-room__inline-control">
+                    <small>HUMAN GATE</small>
+                    <h3>{currentGate.name}</h3>
+                    <p>{run?.workflow.steps.find((step) => step.id === currentGate.stepId && step.kind === "human-gate")?.summary}</p>
+                    <textarea value={gateComment} onChange={(event) => setGateComment(event.target.value)} rows={3} placeholder="填写批准说明或驳回原因（可选）" />
+                    <div>
+                      <button type="button" className="button-danger-soft" disabled={busy || !executionEnabled} onClick={() => void perform(() => onResolveGate({ taskId: task.id, decision: "reject", comment: gateComment }))}><X size={14} />驳回</button>
+                      <button type="button" className="button-primary" disabled={busy || !executionEnabled} onClick={() => void perform(() => onResolveGate({ taskId: task.id, decision: "approve", comment: gateComment }))}><Check size={14} />批准并继续</button>
+                    </div>
+                  </section>
+                )}
+
+                {isReviewEntry(entry) && reviewTarget && (
+                  <section className="execution-review-card task-room__inline-control">
+                    <small>EXECUTION ACCEPTANCE</small>
+                    <h3>验收本次执行报告</h3>
+                    <p>“已报告”只表示 Agent 返回了结果。请根据任务验收标准明确记录结论。</p>
+                    <textarea value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} rows={3} placeholder="接受可选填说明；请求修订或拒绝必须填写理由" />
+                    <div>
+                      <button type="button" className="button-danger-soft" disabled={busy || !reviewComment.trim()} onClick={() => void perform(() => onReviewExecution({ taskId: task.id, executionKind: reviewTarget.kind, executionId: reviewTarget.execution.id, decision: "reject", comment: reviewComment }))}><X size={14} />拒绝</button>
+                      <button type="button" className="button-secondary" disabled={busy || !reviewComment.trim()} onClick={() => void perform(() => onReviewExecution({ taskId: task.id, executionKind: reviewTarget.kind, executionId: reviewTarget.execution.id, decision: "revision-requested", comment: reviewComment }))}><RotateCcw size={14} />请求修订</button>
+                      <button type="button" className="button-primary" disabled={busy} onClick={() => void perform(() => onReviewExecution({ taskId: task.id, executionKind: reviewTarget.kind, executionId: reviewTarget.execution.id, decision: "accept", comment: reviewComment }))}><Check size={14} />接受报告</button>
+                    </div>
+                  </section>
+                )}
+              </div>
             ))}
-            {comments.length === 0 && <p className="task-comments__empty">还没有讨论。补充上下文后，下一次分发会把评论一并交给 Agent。</p>}
           </div>
-          <form className="task-comment-composer" onSubmit={(event) => {
+
+          <form className="task-comment-composer task-room__composer" onSubmit={(event) => {
             event.preventDefault();
             const body = commentBody;
             void perform(async () => {
@@ -200,32 +285,32 @@ export function TaskDetailPanel({
               setCommentBody("");
             });
           }}>
-            <textarea value={commentBody} onChange={(event) => setCommentBody(event.target.value)} rows={3} placeholder="补充上下文；用 @builder 或 @BUILD 可直接委派…" />
-            <button type="submit" className="button-secondary" disabled={busy || !commentBody.trim()}><Send size={13} />发送评论</button>
-          </form>
-        </section>
-
-        <section className="task-detail__section">
-          <div className="section-title"><div><small>ACTIVITY</small><h3>事件记录</h3></div></div>
-          <div className="activity-list">
-            {[...activities].reverse().map((activity) => (
-              <div key={activity.id} className={`activity-item activity-item--${activity.kind}`}>
-                <i /><div><strong>{activity.summary}</strong>{activity.detail && <p>{activity.detail}</p>}<small>{formatRelativeTime(activity.createdAt)}</small></div>
+            <label htmlFor={`task-room-message-${task.id}`}>发送到 Task Room</label>
+            <textarea id={`task-room-message-${task.id}`} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} rows={3} placeholder="补充上下文；用 @builder 或 @BUILD 可直接委派…" />
+            {commentBody.trim() && (
+              <div className={`mention-impact ${mentionPreview.error ? "is-error" : mentionPreview.agents.length > 0 ? "is-dispatch" : "is-comment"}`} role={mentionPreview.error ? "alert" : "status"}>
+                {mentionPreview.error
+                  ? <><XCircle size={13} /><span>{mentionPreview.error}</span></>
+                  : mentionPreview.agents.length > 0
+                    ? <><GitBranch size={13} /><span>提交后将创建 {mentionPreview.agents.length} 个 AgentTask：{mentionPreview.agents.map((agent) => `${agent.name} (@${agent.id})`).join(" → ")}</span></>
+                    : <><MessageCircle size={13} /><span>提交后仅追加用户消息，不创建 AgentTask。</span></>}
               </div>
-            ))}
-          </div>
+            )}
+            <button type="submit" className="button-secondary" aria-label="发送评论" disabled={busy || !commentBody.trim() || Boolean(mentionPreview.error)}><Send size={13} />发送消息</button>
+          </form>
         </section>
       </div>
 
       {error && <p className="task-detail__error" role="alert">{error}</p>}
+      {!executionEnabled && !task.activeRunId && !task.activeAgentTaskId && task.stage !== "completed" && <p className="task-detail__execution-disabled">Pi Runtime 不可用；任务记录仍可编辑，执行入口已暂停。</p>}
       <footer className="task-detail__actions">
-        {!task.activeRunId && !task.activeAgentTaskId && task.status !== "completed" && <button type="button" className="button-primary" disabled={busy} onClick={() => void perform(onDispatch)}>{isRedispatch ? <RotateCcw size={14} /> : <Play size={14} />}{isRedispatch ? "重新分发" : "开始执行"}</button>}
+        {!task.activeRunId && !task.activeAgentTaskId && task.stage !== "completed" && <button type="button" className="button-primary" disabled={busy || !executionEnabled} onClick={() => void perform(onDispatch)}>{isRedispatch ? <RotateCcw size={14} /> : <Play size={14} />}{isRedispatch ? "重新分发" : "开始执行"}</button>}
         {(task.activeRunId || activeAgentTask) && <button type="button" className="button-danger-soft" disabled={busy} onClick={() => void perform(onAbort)}><Ban size={14} />中止执行</button>}
         {!task.activeRunId && !task.activeAgentTaskId && <button type="button" className="button-secondary" disabled={busy} onClick={onEdit}><Pencil size={14} />编辑</button>}
         {!task.activeRunId && !task.activeAgentTaskId && (
           <select aria-label="手动移动任务" value="" disabled={busy} onChange={(event) => {
-            const status = event.target.value as ManualTaskStatus;
-            if (status) void perform(() => onMove(status));
+            const stage = event.target.value as ManualTaskStage;
+            if (stage) void perform(() => onMove(stage));
           }}>
             <option value="">移动到…</option>
             <option value="planned">待规划</option>

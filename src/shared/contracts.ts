@@ -14,12 +14,15 @@ import type {
   CreateTaskCommentInput,
   CreateSquadInput,
   CreateTaskInput,
-  ManualTaskStatus,
+  ManualTaskStage,
+  OpenTaskSessionInput,
+  ReviewExecutionInput,
   ResolveGateInput,
   UpdateTaskInput,
   UpdateAutopilotInput,
   UpdateSquadInput,
 } from "./kanban";
+import type { CapabilityHealthSnapshot, CapabilityName } from "./capabilities";
 
 type WithoutRequestId<T> = T extends { id?: string } ? Omit<T, "id"> : never;
 
@@ -187,9 +190,12 @@ export type RuntimeSignal =
 export type BridgeEvent =
   | { readonly source: "pi"; readonly payload: AgentSessionEvent | RpcExtensionUIRequest }
   | { readonly source: "runtime"; readonly payload: RuntimeSignal }
-  | { readonly source: "board"; readonly payload: BoardBridgeEvent };
+  | { readonly source: "board"; readonly payload: BoardBridgeEvent }
+  | { readonly source: "capability"; readonly payload: { readonly type: "capability-health"; readonly snapshot: CapabilityHealthSnapshot } };
 
 export interface StellaDesktopApi {
+  capabilities(): Promise<CapabilityHealthSnapshot>;
+  retryCapability(name: CapabilityName): Promise<CapabilityHealthSnapshot>;
   initialize(): Promise<RuntimeBootstrap>;
   command(command: PiCommand): Promise<PiResponse>;
   refresh(): Promise<RuntimeBootstrap>;
@@ -202,7 +208,7 @@ export interface StellaDesktopApi {
   boardInitialize(): Promise<BoardBootstrap>;
   boardCreateTask(input: CreateTaskInput): Promise<BoardBootstrap>;
   boardUpdateTask(input: UpdateTaskInput): Promise<BoardBootstrap>;
-  boardMoveTask(taskId: string, status: ManualTaskStatus): Promise<BoardBootstrap>;
+  boardMoveTask(taskId: string, stage: ManualTaskStage): Promise<BoardBootstrap>;
   boardDeleteTask(taskId: string): Promise<BoardBootstrap>;
   boardAddComment(input: CreateTaskCommentInput): Promise<BoardBootstrap>;
   boardCreateSquad(input: CreateSquadInput): Promise<BoardBootstrap>;
@@ -214,7 +220,9 @@ export interface StellaDesktopApi {
   boardTriggerAutopilot(autopilotId: string): Promise<BoardBootstrap>;
   boardDispatchTask(taskId: string): Promise<BoardBootstrap>;
   boardResolveGate(input: ResolveGateInput): Promise<BoardBootstrap>;
+  boardReviewExecution(input: ReviewExecutionInput): Promise<BoardBootstrap>;
   boardAbortTask(taskId: string): Promise<BoardBootstrap>;
+  openTaskSession(input: OpenTaskSessionInput): Promise<RuntimeBootstrap>;
   windowAction(action: "minimize" | "maximize" | "close"): Promise<void>;
   onEvent(listener: (event: BridgeEvent) => void): () => void;
 }

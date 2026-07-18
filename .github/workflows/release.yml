@@ -19,17 +19,20 @@ jobs:
           - label: Windows x64
             family: windows
             os: windows-latest
-            script: dist:win
+            package_script: package:dir:win:x64
+            dist_script: dist:win
             artifact: stella-windows-x64
           - label: macOS Apple Silicon
             family: mac
             os: macos-latest
-            script: dist:mac:arm64
+            package_script: package:dir:mac:arm64
+            dist_script: dist:mac:arm64
             artifact: stella-macos-arm64
           - label: macOS Intel
             family: mac
             os: macos-15-intel
-            script: dist:mac:x64
+            package_script: package:dir:mac:x64
+            dist_script: dist:mac:x64
             artifact: stella-macos-x64
 
     runs-on: ${{ matrix.os }}
@@ -55,11 +58,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests
-        run: npm test
+      - name: Run full source quality gate
+        run: npm run check
+
+      - name: Package native unpacked application
+        run: npm run ${{ matrix.package_script }}
+
+      - name: Verify bundled Pi and capability-safe shell
+        run: npm run test:packaged
 
       - name: Build distributables
-        run: npm run ${{ matrix.script }}
+        run: npm run ${{ matrix.dist_script }}
+
+      - name: Generate SHA-256 manifest
+        run: npm run release:checksums
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -72,6 +84,7 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest*.yml
+            release/SHA256SUMS.txt
 
   release:
     name: Publish GitHub Release

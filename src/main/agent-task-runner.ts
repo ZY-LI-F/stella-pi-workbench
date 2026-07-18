@@ -1,7 +1,14 @@
 import type { PiCommand, PiResponse, RuntimeSignal } from "../shared/contracts";
 import type { BoardBootstrap, BoardBridgeEvent } from "../shared/kanban";
+import { backgroundSessionName } from "../shared/session-policy";
 import type { PiRuntimeStartOptions } from "./pi-rpc-runtime";
 import { AgentTaskService, type ClaimedAgentTask } from "./agent-task-service";
+import {
+  WorkspaceAdmission,
+  WorkspaceAdmissionAbortError,
+  assertAgentWorkspacePolicy,
+  type WorkspaceLease,
+} from "./workspace-admission";
 
 export interface AgentTaskRuntime {
   readonly running: boolean;
@@ -22,6 +29,7 @@ interface AgentTaskRunnerDependencies {
   readonly service: AgentTaskService;
   readonly runtimeFactory: AgentTaskRuntimeFactory;
   readonly emitBoardEvent: (event: BoardBridgeEvent) => void;
+  readonly admission: WorkspaceAdmission;
 }
 
 interface ActiveExecution {
@@ -29,7 +37,14 @@ interface ActiveExecution {
   readonly agentTaskId: string;
   readonly runtimeToken: string;
   readonly runtime: AgentTaskRuntime;
+  readonly lease?: WorkspaceLease;
   settling: boolean;
+}
+
+interface WaitingExecution {
+  readonly taskId: string;
+  readonly agentTaskId: string;
+  readonly controller: AbortController;
 }
 
 interface RpcStateData {
@@ -60,7 +75,10 @@ export class AgentTaskRunner {
   readonly #service: AgentTaskService;
   readonly #runtimeFactory: AgentTaskRuntimeFactory;
   readonly #emitBoardEvent: (event: BoardBridgeEvent) => void;
+  readonly #admission: WorkspaceAdmission;
   #active?: ActiveExecution;
+  #waiting?: WaitingExecution;
+  #drainPromise?: Promise<void>;
   #draining = false;
   #stopping = false;
 
@@ -68,6 +86,7 @@ export class AgentTaskRunner {
     this.#service = dependencies.service;
     this.#runtimeFactory = dependencies.runtimeFactory;
     this.#emitBoardEvent = dependencies.emitBoardEvent;
+    this.#admission = dependencies.admission;
   }
 
   start(): void {
@@ -79,15 +98,24 @@ export class AgentTaskRunner {
 
   notify(): void {
     if (this.#stopping || this.#active || this.#draining) return;
-    void this.#drain().catch((error) => this.#reportError(error));
+    const pending = this.#drain();
+    this.#drainPromise = pending;
+    void pending
+      .catch((error) => this.#reportError(error))
+      .finally(() => { if (this.#drainPromise === pending) this.#drainPromise = undefined; });
   }
 
   async abortTask(taskId: string): Promise<BoardBootstrap> {
+    if (this.#waiting?.taskId === taskId) this.#waiting.controller.abort();
     const result = await this.#service.abortTask(taskId);
     const active = this.#active;
     if (active && active.agentTaskId === (result.runningAgentTaskId ?? result.agentTaskId)) {
       this.#active = undefined;
-      await active.runtime.abortAndStop();
+      try {
+        await active.runtime.abortAndStop();
+      } finally {
+        active.lease?.release();
+      }
     }
     this.notify();
     return result.bootstrap;
@@ -95,31 +123,79 @@ export class AgentTaskRunner {
 
   async shutdown(): Promise<void> {
     this.#stopping = true;
+    this.#waiting?.controller.abort();
+    await this.#drainPromise;
     const active = this.#active;
     if (!active) return;
     await this.#service.interruptRunning(active.agentTaskId, active.runtimeToken, "Stella 关闭，Agent 执行已中断");
     this.#active = undefined;
-    await active.runtime.abortAndStop();
+    try {
+      await active.runtime.abortAndStop();
+    } finally {
+      active.lease?.release();
+    }
   }
 
   async #drain(): Promise<void> {
     if (this.#draining || this.#stopping || this.#active) return;
     this.#draining = true;
-    let claimedWork = false;
+    let foundWork = false;
     try {
-      const claimed = await this.#service.claimNext();
-      if (!claimed || this.#stopping) return;
-      claimedWork = true;
-      await this.#launch(claimed);
+      const queued = await this.#service.nextQueued();
+      if (!queued || this.#stopping) return;
+      foundWork = true;
+      const agent = queued.agentTask.agentSnapshot;
+      try {
+        assertAgentWorkspacePolicy(agent);
+      } catch (cause) {
+        await this.#service.rejectQueued(queued.agentTask.id, cause);
+        return;
+      }
+      let lease: WorkspaceLease | undefined;
+      if (agent.workspaceAccess === "write") {
+        const controller = new AbortController();
+        const waiting = Object.freeze({ taskId: queued.task.id, agentTaskId: queued.agentTask.id, controller });
+        this.#waiting = waiting;
+        try {
+          lease = await this.#admission.acquireBackground(queued.task.projectPath, {
+            id: `agent-task:${queued.agentTask.id}`,
+            kind: "agent-task",
+            label: `AgentTask · ${agent.name}`,
+            taskId: queued.task.id,
+            executionId: queued.agentTask.id,
+          }, {
+            signal: controller.signal,
+            onQueued: (owner) => this.#service.recordWorkspaceWait(queued.agentTask.id, owner.label).then(() => undefined),
+          });
+        } catch (cause) {
+          if (cause instanceof WorkspaceAdmissionAbortError) return;
+          throw cause;
+        } finally {
+          if (this.#waiting === waiting) this.#waiting = undefined;
+        }
+      }
+      if (this.#stopping) {
+        lease?.release();
+        return;
+      }
+      const claimed = await this.#service.claim(queued.agentTask.id);
+      if (!claimed) {
+        lease?.release();
+        return;
+      }
+      await this.#launch(claimed, lease);
     } finally {
       this.#draining = false;
-      if (claimedWork && !this.#active && !this.#stopping) this.notify();
+      if (foundWork && !this.#active && !this.#stopping) this.notify();
     }
   }
 
-  async #launch(claimed: ClaimedAgentTask): Promise<void> {
+  async #launch(claimed: ClaimedAgentTask, lease?: WorkspaceLease): Promise<void> {
     const runtimeToken = claimed.agentTask.runtimeToken;
-    if (!runtimeToken) throw new Error(`已认领 AgentTask ${claimed.agentTask.id} 缺少 runtimeToken`);
+    if (!runtimeToken) {
+      lease?.release();
+      throw new Error(`已认领 AgentTask ${claimed.agentTask.id} 缺少 runtimeToken`);
+    }
     const runtime = this.#runtimeFactory.create({
       emitPiEvent: (event) => void this.#handlePiEvent(claimed.agentTask.id, runtimeToken, event).catch((error) => this.#reportError(error)),
       emitRuntimeSignal: (signal) => this.#handleRuntimeSignal(claimed.agentTask.id, runtimeToken, signal),
@@ -129,6 +205,7 @@ export class AgentTaskRunner {
       agentTaskId: claimed.agentTask.id,
       runtimeToken,
       runtime,
+      lease,
       settling: false,
     };
     this.#active = active;
@@ -137,7 +214,12 @@ export class AgentTaskRunner {
       await runtime.start({
         cwd: claimed.task.projectPath,
         trusted: claimed.task.trusted,
-        sessionName: `[Stella] ${claimed.task.title} · ${agent.name}`,
+        sessionName: backgroundSessionName({
+          taskId: claimed.task.id,
+          executionKind: "agent-task",
+          executionId: claimed.agentTask.id,
+          label: `${claimed.task.title} · ${agent.name}`,
+        }),
         provider: agent.provider,
         model: agent.model,
         thinking: agent.thinking,
@@ -216,7 +298,11 @@ export class AgentTaskRunner {
       });
       if (this.#active !== active) return;
       this.#active = undefined;
-      await active.runtime.stop();
+      try {
+        await active.runtime.stop();
+      } finally {
+        active.lease?.release();
+      }
       this.notify();
     } catch (error) {
       await this.#failActive(active, error);
@@ -229,7 +315,11 @@ export class AgentTaskRunner {
       await this.#service.fail(active.agentTaskId, active.runtimeToken, cause);
     } finally {
       if (this.#active === active) this.#active = undefined;
-      await active.runtime.stop();
+      try {
+        await active.runtime.stop();
+      } finally {
+        active.lease?.release();
+      }
       this.notify();
     }
   }

@@ -7,6 +7,7 @@ import type {
   RuntimeBootstrap,
   StellaDesktopApi,
 } from "@shared/contracts";
+import type { OpenTaskSessionInput } from "@shared/kanban";
 import {
   INITIAL_RUNTIME_STATE,
   runtimeReducer,
@@ -24,6 +25,7 @@ export interface PiRuntimeController {
   refresh(): Promise<RuntimeBootstrap>;
   chooseProject(): ReturnType<StellaDesktopApi["chooseProject"]>;
   openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap>;
+  openTaskSession(input: OpenTaskSessionInput): Promise<RuntimeBootstrap>;
   respondToExtension(response: PiExtensionResponse): Promise<void>;
   expireExtensionRequest(id: string): void;
   notify(message: string, type?: Notice["type"]): void;
@@ -116,6 +118,20 @@ export function usePiRuntime(api: StellaDesktopApi): PiRuntimeController {
     [api],
   );
 
+  const openTaskSession = useCallback(
+    async (input: OpenTaskSessionInput) => {
+      try {
+        const bootstrap = await api.openTaskSession(input);
+        dispatch({ type: "BOOTSTRAP", payload: bootstrap });
+        return bootstrap;
+      } catch (error) {
+        dispatch({ type: "SYNC_FAILED", error: errorMessage(error) });
+        throw error;
+      }
+    },
+    [api],
+  );
+
   const respondToExtension = useCallback(
     async (response: PiExtensionResponse) => {
       await api.respondToExtension(response);
@@ -144,11 +160,12 @@ export function usePiRuntime(api: StellaDesktopApi): PiRuntimeController {
       refresh,
       chooseProject: () => api.chooseProject(),
       openProject,
+      openTaskSession,
       respondToExtension,
       expireExtensionRequest,
       notify,
       dismissNotice,
     }),
-    [api, command, dismissNotice, expireExtensionRequest, notify, openProject, refresh, respondToExtension, state],
+    [api, command, dismissNotice, expireExtensionRequest, notify, openProject, openTaskSession, refresh, respondToExtension, state],
   );
 }

@@ -1,10 +1,27 @@
-import type { AgentDefinition } from "./kanban";
+import type { AgentDefinition, KanbanTask, OrchestrationCatalog, Squad } from "./kanban";
 
 const MENTION_PATTERN = /(?:^|\s)@([A-Za-z0-9_-]+)/gu;
 
 export interface ParsedAgentMentions {
   readonly tokens: readonly string[];
   readonly agents: readonly AgentDefinition[];
+}
+
+export function availableMentionAgentsForTask(
+  task: Pick<KanbanTask, "executionTarget">,
+  catalog: Pick<OrchestrationCatalog, "agents">,
+  squads: readonly Squad[],
+): readonly AgentDefinition[] {
+  const executionTarget = task.executionTarget;
+  if (executionTarget.kind !== "squad") return catalog.agents;
+  const squad = squads.find((candidate) => candidate.id === executionTarget.squadId);
+  if (!squad) throw new Error(`找不到 Squad: ${executionTarget.squadId}`);
+  const agent = (agentId: string): AgentDefinition => {
+    const definition = catalog.agents.find((candidate) => candidate.id === agentId);
+    if (!definition) throw new Error(`未知 Agent: ${agentId}`);
+    return definition;
+  };
+  return Object.freeze([agent(squad.leaderAgentId), ...squad.memberAgentIds.map(agent)]);
 }
 
 export function parseAgentMentions(text: string, availableAgents: readonly AgentDefinition[]): ParsedAgentMentions {

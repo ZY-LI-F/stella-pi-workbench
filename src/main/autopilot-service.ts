@@ -212,7 +212,7 @@ export class AutopilotService {
         projectName: autopilot.projectName,
         trusted: autopilot.trusted,
         executionTarget: Object.freeze({ ...autopilot.executionTarget }),
-        status: "planned",
+        stage: "planned",
         createdAt: now,
         updatedAt: now,
       });
