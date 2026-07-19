@@ -15,6 +15,7 @@ import type {
   CreateTaskCommentInput,
   CreateSquadInput,
   CreateTaskInput,
+  LaunchTeamTaskInput,
   ManualTaskStage,
   OpenTaskSessionInput,
   ReviewExecutionInput,
@@ -209,6 +210,7 @@ export interface StellaDesktopApi {
   copyText(value: string): Promise<void>;
   boardInitialize(): Promise<BoardBootstrap>;
   boardCreateTask(input: CreateTaskInput): Promise<BoardBootstrap>;
+  boardLaunchTeamTask(input: LaunchTeamTaskInput): Promise<BoardBootstrap>;
   boardUpdateTask(input: UpdateTaskInput): Promise<BoardBootstrap>;
   boardMoveTask(taskId: string, stage: ManualTaskStage): Promise<BoardBootstrap>;
   boardDeleteTask(taskId: string): Promise<BoardBootstrap>;

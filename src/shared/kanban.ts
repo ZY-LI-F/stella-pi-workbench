@@ -381,6 +381,10 @@ export interface CreateTaskCommentInput {
   readonly body: string;
 }
 
+export interface LaunchTeamTaskInput {
+  readonly body: string;
+}
+
 export interface CreateProjectAgentInput {
   readonly name: string;
   readonly callsign: string;

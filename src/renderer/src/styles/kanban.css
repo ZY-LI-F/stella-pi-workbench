@@ -1163,6 +1163,9 @@
 .agent-mention-roster button.is-lead { border-color: color-mix(in srgb, var(--accent-warm) 30%, var(--border)); color: var(--accent-warm); }
 .agent-mention-roster button.is-selected { border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--accent); }
 .agent-mention-roster button:disabled { cursor: not-allowed; opacity: .48; }
+.agent-mention-field > textarea { display: block; width: 100%; min-height: 54px; padding: 8px 9px; resize: vertical; border: 1px solid var(--border-strong); border-radius: 8px; outline: 0; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--text); font: inherit; font-size: 8px; line-height: 1.55; caret-color: var(--accent-strong); }
+.agent-mention-field > textarea::placeholder { color: var(--text-faint); }
+.agent-mention-field > textarea:focus { border-color: color-mix(in srgb, var(--accent) 58%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent), inset 0 1px color-mix(in srgb, var(--accent) 5%, transparent); }
 
 .agent-mention-picker { position: absolute; right: 0; bottom: calc(100% + 7px); left: 0; z-index: 5; display: grid; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-strong)); border-radius: 10px; background: color-mix(in srgb, var(--panel-elevated) 97%, transparent); box-shadow: 0 15px 35px color-mix(in srgb, var(--app-bg) 48%, transparent), inset 0 1px color-mix(in srgb, var(--accent) 10%, transparent); animation: mention-roster-reveal 140ms ease-out both; }
 .agent-mention-picker > header { display: flex; min-height: 31px; padding: 0 9px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
@@ -2711,12 +2714,19 @@
 }
 .team-channel-list > button:hover { border-color: var(--border); background: var(--surface-hover); }
 .team-channel-list > button.is-active { border-color: color-mix(in srgb, var(--accent) 26%, var(--border)); background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 13%, transparent), color-mix(in srgb, var(--accent) 4%, transparent)); color: var(--text); }
+.team-channel-list > button.team-channel--launch { border-color: color-mix(in srgb, var(--accent-warm) 20%, var(--border)); background: linear-gradient(105deg, color-mix(in srgb, var(--accent) 7%, transparent), color-mix(in srgb, var(--accent-warm) 5%, transparent)); }
+.team-channel-list > button.team-channel--launch.is-active { border-color: color-mix(in srgb, var(--accent) 46%, var(--border)); box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 70%, transparent), 0 7px 20px color-mix(in srgb, var(--app-bg) 22%, transparent); }
 .team-channel__hash { position: relative; display: grid; width: 23px; height: 23px; place-items: center; border: 1px solid var(--border); border-radius: 7px; }
 .team-channel__hash i { position: absolute; top: -2px; right: -2px; width: 6px; height: 6px; border: 1px solid var(--panel); border-radius: 50%; background: var(--success); box-shadow: 0 0 7px var(--success); }
+.team-channel__launch-mark { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); color: var(--accent-strong); }
+.team-channel__launch-mark i { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .team-channel-list > button > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .team-channel-list strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .team-channel-list small { color: var(--text-faint); font-size: 7px; }
 .team-channel-list time { align-self: start; padding-top: 2px; color: var(--text-faint); font-family: var(--font-mono); font-size: 6px; }
+.team-channel-list__divider { display: flex; height: 27px; padding: 8px 7px 4px; align-items: center; justify-content: space-between; color: var(--text-faint); font-family: var(--font-mono); font-size: 6px; font-weight: 720; letter-spacing: .11em; text-transform: uppercase; }
+.team-channel-list__divider::after { height: 1px; margin-left: 7px; flex: 1; background: linear-gradient(90deg, var(--border), transparent); content: ""; }
+.team-channel-list__divider b { order: 2; color: var(--text-muted); font-weight: 700; }
 .team-empty,
 .team-conversation__empty { display: flex; height: 100%; padding: 24px; align-items: center; justify-content: center; flex-direction: column; color: var(--text-faint); text-align: center; }
 .team-empty { min-height: 210px; }
@@ -2737,6 +2747,73 @@
 .team-conversation__empty h2 { margin: 7px 0 0; color: var(--text); font-size: 17px; }
 .team-conversation__empty p { max-width: 410px; margin: 7px 0 0; font-size: 9px; line-height: 1.65; }
 .team-workspace__error { position: absolute; z-index: 6; right: 12px; bottom: 62px; left: 12px; margin: 0; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--border)); border-radius: 8px; background: color-mix(in srgb, var(--danger) 12%, var(--panel-elevated)); color: var(--danger); font-size: 8px; }
+
+.team-launch-room {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 62px minmax(0, 1fr) auto;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 37%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, var(--panel-elevated) 74%, transparent), color-mix(in srgb, var(--app-bg) 58%, transparent));
+}
+.team-launch-room__header { display: flex; padding: 13px 19px 10px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel-elevated) 76%, transparent); }
+.team-launch-room__header > div { display: flex; flex-direction: column; gap: 3px; }
+.team-launch-room__header small,
+.team-launch-room__stage > small { color: var(--accent); font-family: var(--font-mono); font-size: 6.5px; font-weight: 760; letter-spacing: .16em; }
+.team-launch-room__header h2 { margin: 0; color: var(--text); font-size: 15px; }
+.team-launch-room__header > span { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 7px; }
+.team-launch-room__header > span i { width: 5px; height: 5px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px color-mix(in srgb, var(--success) 70%, transparent); }
+.team-launch-room__stage { position: relative; display: flex; min-height: 0; padding: 24px 28px 18px; align-items: center; flex-direction: column; overflow-y: auto; text-align: center; }
+.team-launch-room__stage::before { position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(circle, color-mix(in srgb, var(--accent) 20%, transparent) .65px, transparent .8px); background-size: 31px 31px; content: ""; opacity: .28; mask-image: radial-gradient(circle at 50% 42%, #000 0, transparent 68%); }
+.team-launch-room__seed { position: relative; display: grid; width: 74px; height: 74px; margin: 4px 0 14px; flex: 0 0 auto; place-items: center; color: var(--accent-strong); }
+.team-launch-room__seed > i,
+.team-launch-room__seed > b { position: absolute; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 50%; }
+.team-launch-room__seed > i { width: 70px; height: 27px; transform: rotate(-18deg); animation: team-launch-orbit 8s linear infinite; }
+.team-launch-room__seed > b { width: 31px; height: 70px; border-color: color-mix(in srgb, var(--accent-warm) 43%, transparent); transform: rotate(43deg); animation: team-launch-orbit-reverse 11s linear infinite; }
+.team-launch-room__seed > span { position: relative; z-index: 1; display: grid; width: 43px; height: 43px; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 47%, var(--border)); border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--accent) 18%, var(--surface)), var(--panel-elevated)); box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 3%, transparent), 0 0 28px color-mix(in srgb, var(--accent) 22%, transparent); }
+.team-launch-room__stage h3 { position: relative; margin: 7px 0 0; color: var(--text); font-size: 22px; letter-spacing: -.035em; }
+.team-launch-room__stage > p { position: relative; max-width: 590px; margin: 9px 0 0; color: var(--text-muted); font-size: 9px; line-height: 1.7; }
+.team-launch-room__stage > p strong { color: var(--accent-strong); font-family: var(--font-mono); }
+.team-launch-room__relay { position: relative; display: flex; width: min(560px, 100%); margin: 20px 0 16px; align-items: center; justify-content: center; }
+.team-launch-room__relay > span { display: flex; min-width: 112px; align-items: center; flex-direction: column; gap: 5px; color: var(--text-faint); font-size: 7px; }
+.team-launch-room__relay > span b { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); border-radius: 50%; background: var(--surface); color: var(--accent); font-family: var(--font-mono); font-size: 7px; }
+.team-launch-room__relay > i { width: min(68px, 8vw); height: 1px; margin-bottom: 15px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 48%, transparent), color-mix(in srgb, var(--accent-warm) 34%, transparent)); }
+.team-launch-room__lead { position: relative; display: grid; width: min(620px, 100%); padding: 11px 13px; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 10px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); border-radius: 11px; background: linear-gradient(105deg, color-mix(in srgb, var(--accent) 8%, var(--surface)), color-mix(in srgb, var(--panel-elevated) 88%, transparent)); text-align: left; }
+.team-launch-room__lead > span { position: relative; display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border)); border-radius: 50%; color: var(--accent-strong); }
+.team-launch-room__lead > span i { position: absolute; right: 0; bottom: 1px; width: 6px; height: 6px; border: 1px solid var(--surface); border-radius: 50%; background: var(--success); box-shadow: 0 0 7px var(--success); }
+.team-launch-room__lead > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.team-launch-room__lead strong { color: var(--text-soft); font-size: 9px; }
+.team-launch-room__lead small { color: var(--accent); font-family: var(--font-mono); font-size: 6px; }
+.team-launch-room__lead p { margin: 4px 0 0; color: var(--text-muted); font-size: 7px; line-height: 1.5; }
+.team-launch-room__composer { position: relative; z-index: 4; display: grid; width: min(850px, calc(100% - 34px)); margin: 0 auto 15px; padding: 11px; gap: 7px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-strong)); border-radius: 13px; background: color-mix(in srgb, var(--panel-elevated) 96%, transparent); box-shadow: 0 -12px 38px color-mix(in srgb, var(--app-bg) 38%, transparent), inset 0 1px color-mix(in srgb, var(--accent) 9%, transparent); backdrop-filter: var(--blur); }
+.team-launch-room__composer-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.team-launch-room__composer-label > span { display: flex; align-items: center; gap: 5px; color: var(--text-soft); font-size: 7.5px; font-weight: 690; }
+.team-launch-room__composer-label > span svg { color: var(--accent); }
+.team-launch-room__composer-label > small { color: var(--text-faint); font-size: 6px; }
+.team-launch-room__composer textarea { min-height: 72px; }
+.team-launch-room__impact { display: flex; min-height: 31px; padding: 6px 8px; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text-faint); font-size: 7px; line-height: 1.45; }
+.team-launch-room__impact svg { flex: 0 0 auto; color: var(--accent); }
+.team-launch-room__impact.is-ready { border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--text-muted); }
+.team-launch-room__impact.is-error { border-color: color-mix(in srgb, var(--danger) 36%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, var(--surface)); color: var(--danger); }
+.team-launch-room__composer > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.team-launch-room__composer > footer > span { display: flex; align-items: center; gap: 5px; color: var(--text-faint); font-family: var(--font-mono); font-size: 5.8px; }
+.team-launch-room__composer > footer > span i { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
+
+@keyframes team-launch-orbit { to { transform: rotate(342deg); } }
+@keyframes team-launch-orbit-reverse { to { transform: rotate(-317deg); } }
+
+:root[data-skin="chenxi"] .team-launch-room__lead,
+:root[data-skin="chenxi"] .team-launch-room__composer { border-radius: 15px 7px 14px 6px; box-shadow: 0 9px 25px color-mix(in srgb, #6e4d69 10%, transparent); }
+:root[data-skin="dingyang"] .team-launch-room { background-image: linear-gradient(color-mix(in srgb, var(--accent) 4%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--accent) 4%, transparent) 1px, transparent 1px); background-size: 22px 22px; }
+:root[data-skin="dingyang"] .team-launch-room__lead,
+:root[data-skin="dingyang"] .team-launch-room__composer,
+:root[data-skin="dingyang"] .team-launch-room__impact,
+:root[data-skin="dingyang"] .team-launch-room__seed > span,
+:root[data-skin="dingyang"] .team-launch-room__relay > span b { border-radius: 1px; }
 
 .team-pulse__orbit { position: relative; display: grid; width: 34px; height: 34px; place-items: center; color: var(--accent-strong); }
 .team-pulse__orbit i,
@@ -2898,6 +2975,8 @@
   }
   .agent-presence--running .agent-presence__avatar i { animation: none; }
   .agent-mention-picker { animation: none; }
+  .team-launch-room__seed > i,
+  .team-launch-room__seed > b { animation: none; }
 
   .task-room *,
   .task-room *::before,

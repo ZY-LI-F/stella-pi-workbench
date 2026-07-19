@@ -15,6 +15,7 @@ import type {
   CreateTaskCommentInput,
   CreateSquadInput,
   CreateTaskInput,
+  LaunchTeamTaskInput,
   ManualTaskStage,
   OpenTaskSessionInput,
   ReviewExecutionInput,
@@ -42,6 +43,8 @@ const api: StellaDesktopApi = Object.freeze({
   boardInitialize: () => ipcRenderer.invoke("stella:board:initialize") as Promise<BoardBootstrap>,
   boardCreateTask: (input: CreateTaskInput) =>
     ipcRenderer.invoke("stella:board:create-task", input) as Promise<BoardBootstrap>,
+  boardLaunchTeamTask: (input: LaunchTeamTaskInput) =>
+    ipcRenderer.invoke("stella:board:launch-team-task", input) as Promise<BoardBootstrap>,
   boardUpdateTask: (input: UpdateTaskInput) =>
     ipcRenderer.invoke("stella:board:update-task", input) as Promise<BoardBootstrap>,
   boardMoveTask: (taskId: string, stage: ManualTaskStage) =>

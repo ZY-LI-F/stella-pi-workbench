@@ -35,6 +35,7 @@ import {
   type CreateProjectAgentInput,
   type CreateTaskCommentInput,
   type CreateTaskInput,
+  type LaunchTeamTaskInput,
   type ExecutionTarget,
   type CreateSquadInput,
   type ManualTaskStage,
@@ -340,6 +341,11 @@ function validatedTaskComment(value: unknown): CreateTaskCommentInput {
   });
 }
 
+function validatedTeamLaunch(value: unknown): LaunchTeamTaskInput {
+  const input = objectValue(value, "团队启动参数");
+  return Object.freeze({ body: textValue(input.body, "body") });
+}
+
 function validatedProjectAgent(value: unknown): CreateProjectAgentInput {
   const input = objectValue(value, "自定义 Agent 参数");
   if (input.workspaceAccess !== "read" && input.workspaceAccess !== "write") throw new Error("workspaceAccess 必须是 read 或 write");
@@ -515,6 +521,22 @@ async function createBoardTaskForCurrentProject(value: unknown): Promise<BoardBo
     projectName: project.name,
     trusted: project.trusted,
   }));
+}
+
+async function launchTeamTaskForCurrentProject(value: unknown): Promise<BoardBootstrap> {
+  assertTaskCapability();
+  assertPiExecutionCapability();
+  if (!currentProject) throw new Error("尚未选择项目");
+  const input = validatedTeamLaunch(value);
+  const project = await getProjectMeta(currentProject);
+  const bootstrap = await agentTaskService.launchTeamTask(Object.freeze({
+    ...input,
+    projectPath: project.cwd,
+    projectName: project.name,
+    trusted: project.trusted,
+  }));
+  agentTaskRunner.notify();
+  return bootstrap;
 }
 
 async function dispatchBoardTask(taskId: string): Promise<BoardBootstrap> {
@@ -961,6 +983,7 @@ function registerIpcHandlers(): void {
     return bootstrap;
   });
   ipcMain.handle("stella:board:create-task", (_event, input: unknown) => createBoardTaskForCurrentProject(input));
+  ipcMain.handle("stella:board:launch-team-task", (_event, input: unknown) => launchTeamTaskForCurrentProject(input));
   ipcMain.handle("stella:board:update-task", (_event, input: unknown) => {
     assertTaskCapability();
     return boardService.updateTask(validatedUpdateTask(input));

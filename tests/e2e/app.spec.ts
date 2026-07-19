@@ -70,7 +70,16 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
 
     await window.getByRole("button", { name: "团队协作", exact: true }).click();
     await expect(window.getByRole("heading", { name: "团队协作" })).toBeVisible();
+    await expect(window.getByRole("heading", { name: "项目启动室", exact: true })).toBeVisible();
+    const launchComposer = window.getByPlaceholder("@LEAD 说明目标、边界和希望得到的结果…");
+    await window.getByRole("button", { name: "在项目启动室 @通用调度负责人" }).click();
+    await expect(launchComposer).toHaveValue("@LEAD ");
+    await launchComposer.fill("@LEAD 调研交互需求，拆解实现与验证任务，并在成员报告后给出验收结论");
+    await expect(window.getByText(/将创建任务“调研交互需求，拆解实现与验证任务，并在成员报告后给出验收结论”/)).toBeVisible();
+    await expect(window.getByRole("button", { name: "在项目启动室 @实现工程师" })).toBeDisabled();
+    await window.screenshot({ path: "docs/team-launch-room-stella.png", fullPage: true, animations: "disabled" });
     await expect(window.getByRole("button", { name: /验证固定 Agent 看板/ })).toBeVisible();
+    await window.getByRole("button", { name: /验证固定 Agent 看板/ }).click();
     const teamRoom = window.getByLabel("任务详情：验证固定 Agent 看板");
     const teamComposer = teamRoom.getByPlaceholder("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…");
     await teamComposer.fill("@lead 请拆解任务、委派合适 Worker 并验收结果");

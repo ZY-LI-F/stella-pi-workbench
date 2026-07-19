@@ -29,9 +29,11 @@ The left sidebar contains three first-class workspace entries:
 
 Team Chat uses three columns:
 
-1. Task Channels: one channel per Task, searchable and ordered by active/updated state.
-2. Collaboration Timeline: the existing `TaskDetailPanel` in full-workspace mode, including DAG, gates, reports, acceptance and composer.
+1. Rooms and Task Channels: one permanent project launch room followed by one channel per Task; Task channels are searchable and ordered by active/updated state.
+2. Collaboration Timeline: the launch room before a Task exists, or the existing `TaskDetailPanel` in full-workspace mode after selecting a Task, including DAG, gates, reports, acceptance and composer.
 3. Team Pulse: derived Agent state, current Task and workload, plus project Agent creation.
+
+The project launch room is a virtual pre-Task surface, not a second durable message store. It accepts exactly one `@LEAD` plus a non-empty objective. The main process atomically writes a medium-priority Task, deterministic title, explicit acceptance rule, first user message, activities and queued Coordinator AgentTask. On success the UI selects the new Task Room; on any validation or capability failure it writes nothing.
 
 ## Mention semantics
 
@@ -43,6 +45,7 @@ Team Chat uses three columns:
 - a normal message while LEAD is `waiting_human`: appends the user message and creates a `coordinator-review` attempt.
 - unknown, ambiguous or out-of-project mentions reject the entire transaction.
 - no Task Room message is silently converted into a new Kanban Task.
+- the project launch room is the only exception: its impact preview explicitly states that `@LEAD` creates a new Task, and direct Worker mentions are rejected there.
 
 ## LEAD structured protocol
 
@@ -89,5 +92,5 @@ Schema v4 stores `customAgents` in `board.json`. A project Agent contains the no
 ## Verification obligations
 
 - unit tests cover stage transitions, acceptance, restart interruption, project Agent boundaries, Presence projection, strict Coordinator parsing, real Worker creation, LEAD re-entry and invalid prose rejection;
-- Electron E2E covers sidebar Team entry, Task Channel selection, Chinese Agent roster search, stable callsign insertion, `@lead` impact preview, AgentDraft creation, Team Pulse one-click insertion, rendering and screenshot capture;
+- Electron E2E covers sidebar Team entry, permanent project launch room, Team Pulse LEAD insertion, explicit Task-creation preview, Task Channel selection, Chinese Agent roster search, stable callsign insertion, `@lead` impact preview, AgentDraft creation, rendering and screenshot capture;
 - the existing deterministic and live pharmaceutical E2E suites remain part of regression checks.

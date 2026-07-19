@@ -220,6 +220,46 @@ describe("AgentTaskRunner", () => {
     expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
   });
 
+  it("atomically creates a Task, first message, and queued Coordinator from the project launch room", async () => {
+    const { repository, agentTaskService } = await setup();
+    const bootstrap = await agentTaskService.launchTeamTask({
+      body: "@LEAD 评估 NLRP3 作为帕金森病早研靶点。覆盖临床竞品和关键风险。",
+      projectPath: "C:/project",
+      projectName: "project",
+      trusted: true,
+    });
+
+    const task = bootstrap.board.tasks[0];
+    expect(task).toMatchObject({
+      title: "评估 NLRP3 作为帕金森病早研靶点",
+      description: "评估 NLRP3 作为帕金森病早研靶点。覆盖临床竞品和关键风险。",
+      priority: "medium",
+      stage: "queued",
+      executionTarget: { kind: "agent", agentId: "lead" },
+    });
+    const root = bootstrap.board.agentTasks.find((agentTask) => agentTask.id === task?.activeAgentTaskId);
+    expect(root).toMatchObject({ taskId: task?.id, kind: "coordinator", status: "queued", acceptance: "not-ready", agentSnapshot: { id: "lead" } });
+    expect(root?.prompt).toContain("用户请求：@LEAD 评估 NLRP3");
+    expect(bootstrap.board.comments).toEqual([expect.objectContaining({ taskId: task?.id, author: "user", body: expect.stringContaining("@LEAD") })]);
+    expect(bootstrap.board.activities.map((activity) => activity.summary)).toEqual(expect.arrayContaining([
+      "任务由项目启动室创建",
+      "用户向 LEAD 提交了启动指令",
+      "项目启动室已交给 LEAD",
+    ]));
+  });
+
+  it("does not leave an orphan Task when a project launch instruction is invalid", async () => {
+    const { repository, agentTaskService } = await setup();
+    const before = repository.state;
+    await expect(agentTaskService.launchTeamTask({
+      body: "@BUILD 直接开始实现",
+      projectPath: "C:/project",
+      projectName: "project",
+      trusted: true,
+    })).rejects.toThrow("只接受 @LEAD");
+    expect(repository.state).toBe(before);
+  });
+
   it("lets @lead delegate with a strict action, review worker evidence, and report for human acceptance", async () => {
     const runtimeFactory = new FakeAgentRuntimeFactory([
       JSON.stringify({ action: "delegate", summary: "先实现再由我验收", delegations: [{ agentId: "builder", objective: "完成真实修改", acceptanceCriteria: "测试通过并报告证据" }] }),

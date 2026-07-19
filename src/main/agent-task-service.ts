@@ -4,6 +4,7 @@ import { availableMentionAgentsForTask, parseAgentMentions } from "../shared/age
 import { coordinatorActionMessage, parseCoordinatorAction, type CoordinatorAction, type CoordinatorDelegation } from "../shared/coordinator-protocol";
 import { catalogForBoard } from "../shared/orchestration-catalog";
 import { applyTaskLifecycle } from "../shared/task-lifecycle";
+import { deriveTeamLaunchDraft } from "../shared/team-launch";
 import {
   isTerminalAgentTaskStatus,
   type AgentDefinition,
@@ -11,12 +12,19 @@ import {
   type BoardBootstrap,
   type BoardState,
   type CreateTaskCommentInput,
+  type LaunchTeamTaskInput,
   type KanbanTask,
   type OrchestrationCatalog,
   type Squad,
   type TaskActivity,
   type TaskComment,
 } from "../shared/kanban";
+
+export interface TeamLaunchContext extends LaunchTeamTaskInput {
+  readonly projectPath: string;
+  readonly projectName: string;
+  readonly trusted: boolean;
+}
 
 interface AgentTaskServiceDependencies {
   readonly repository: BoardRepository;
@@ -165,6 +173,66 @@ export class AgentTaskService {
         agentTasks: [...current.agentTasks, root, ...children],
         activities: [...current.activities, ...activities],
       };
+    });
+  }
+
+  async launchTeamTask(input: TeamLaunchContext): Promise<BoardBootstrap> {
+    const body = normalizedRequired(input.body, "启动指令");
+    const draft = deriveTeamLaunchDraft(body);
+    const projectPath = normalizedRequired(input.projectPath, "项目路径");
+    const projectName = normalizedRequired(input.projectName, "项目名称");
+    const now = this.#now();
+    return this.#commit((current) => {
+      const catalog = this.#catalogFor(current);
+      const lead = catalog.agents.find((agent) => agent.id === "lead");
+      if (!lead) throw new Error("编排目录缺少通用调度负责人 LEAD");
+
+      const task: KanbanTask = Object.freeze({
+        id: this.#id(),
+        title: draft.title,
+        description: draft.objective,
+        acceptanceCriteria: draft.acceptanceCriteria,
+        priority: draft.priority,
+        projectPath,
+        projectName,
+        trusted: input.trusted,
+        executionTarget: Object.freeze({ kind: "agent", agentId: lead.id }),
+        stage: "planned",
+        createdAt: now,
+        updatedAt: now,
+      });
+      const availableAgents = availableMentionAgentsForTask(task, catalog, current.squads);
+      const parsed = parseAgentMentions(body, availableAgents);
+      if (parsed.tokens.length !== 1 || parsed.agents.length !== 1 || parsed.agents[0]?.id !== lead.id) {
+        throw new Error("项目启动室只能通过一个 @LEAD 创建任务");
+      }
+
+      const comment: TaskComment = Object.freeze({
+        id: this.#id(),
+        taskId: task.id,
+        author: "user",
+        messageKind: "comment",
+        body,
+        createdAt: now,
+      });
+      const seeded: BoardState = {
+        ...current,
+        tasks: [task, ...current.tasks],
+        comments: [...current.comments, comment],
+        activities: [
+          ...current.activities,
+          this.#activity(task.id, "task", "任务由项目启动室创建", draft.objective, now),
+          this.#activity(task.id, "comment", "用户向 LEAD 提交了启动指令", body, now),
+        ],
+      };
+      const coordinator = this.#rootAgentTask(
+        task,
+        lead,
+        "coordinator",
+        this.#coordinatorPrompt(task, body, availableAgents, [comment]),
+        now,
+      );
+      return this.#withDispatchedRoot(seeded, task, coordinator, "项目启动室已交给 LEAD", `@${lead.callsign}`, now);
     });
   }
 
