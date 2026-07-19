@@ -14,9 +14,10 @@ import {
   UsersRound,
 } from "lucide-react";
 import type { CapabilityHealthSnapshot, CapabilityName } from "@shared/capabilities";
-import type { RecentProject, RuntimeBootstrap, SessionSummary } from "@shared/contracts";
+import type { ModelSummary, RecentProject, RuntimeBootstrap, SessionSummary } from "@shared/contracts";
 import type { SkinPreference } from "../lib/skins";
 import { Brand } from "./Brand";
+import { GlobalModelControl } from "./GlobalModelControl";
 
 interface SidebarProps {
   readonly bootstrap?: RuntimeBootstrap;
@@ -24,6 +25,7 @@ interface SidebarProps {
   readonly skin: SkinPreference;
   readonly open: boolean;
   readonly activeView: WorkspaceView;
+  readonly modelChanging: boolean;
   readonly onClose: () => void;
   readonly onNewSession: () => void;
   readonly onNewTask: () => void;
@@ -35,6 +37,7 @@ interface SidebarProps {
   readonly onOpenTerminal: () => void;
   readonly onOpenInspector: () => void;
   readonly onOpenSettings: () => void;
+  readonly onModelChange: (model: ModelSummary) => void;
 }
 
 export type WorkspaceView = "chat" | "team" | "kanban";
@@ -100,6 +103,7 @@ export function Sidebar({
   skin,
   open,
   activeView,
+  modelChanging,
   onClose,
   onNewSession,
   onNewTask,
@@ -111,6 +115,7 @@ export function Sidebar({
   onOpenTerminal,
   onOpenInspector,
   onOpenSettings,
+  onModelChange,
 }: SidebarProps) {
   const [query, setQuery] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
@@ -172,6 +177,14 @@ export function Sidebar({
             <span>会话图谱</span>
           </button>
         </nav>
+
+        <GlobalModelControl
+          models={bootstrap?.models ?? []}
+          selectedModel={bootstrap?.state.model}
+          online={piReady}
+          busy={modelChanging}
+          onChange={onModelChange}
+        />
 
         <div className="project-switcher">
           <button

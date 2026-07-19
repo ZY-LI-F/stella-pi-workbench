@@ -26,6 +26,7 @@ import type {
   UpdateSquadInput,
 } from "./kanban";
 import type { CapabilityHealthSnapshot, CapabilityName } from "./capabilities";
+import type { SkinArtworkDescriptor, SkinId } from "./skin-artwork";
 
 type WithoutRequestId<T> = T extends { id?: string } ? Omit<T, "id"> : never;
 
@@ -204,6 +205,9 @@ export interface StellaDesktopApi {
   refresh(): Promise<RuntimeBootstrap>;
   respondToExtension(response: PiExtensionResponse): Promise<void>;
   chooseProject(): Promise<ProjectSelection | null>;
+  skinArtworkInitialize(): Promise<readonly SkinArtworkDescriptor[]>;
+  chooseSkinArtwork(skin: SkinId): Promise<SkinArtworkDescriptor | null>;
+  resetSkinArtwork(skin: SkinId): Promise<void>;
   openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap>;
   revealPath(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;

@@ -60,6 +60,107 @@
   mix-blend-mode: multiply;
 }
 
+:root[data-skin="xuri"] .stellar-backdrop__art--xuri {
+  opacity: 0.58;
+  filter: brightness(0.72) saturate(0.88) contrast(1.02);
+}
+
+:root[data-skin="xuri"][data-theme="light"] .stellar-backdrop__art--xuri {
+  opacity: 0.34;
+  filter: saturate(0.76) contrast(0.92);
+  mix-blend-mode: multiply;
+}
+
+:root[data-skin="yuehua"] .stellar-backdrop__art--yuehua {
+  opacity: 0.6;
+  filter: brightness(0.72) saturate(0.88);
+}
+
+:root[data-skin="yuehua"][data-theme="light"] .stellar-backdrop__art--yuehua {
+  opacity: 0.3;
+  filter: saturate(0.62) contrast(0.9);
+  mix-blend-mode: multiply;
+}
+
+:root[data-skin="kuroshitsuji"] .stellar-backdrop__art--kuroshitsuji {
+  opacity: 0.7;
+  filter: brightness(0.72) saturate(0.72) contrast(1.06);
+}
+
+:root[data-skin="kuroshitsuji"][data-theme="light"] .stellar-backdrop__art--kuroshitsuji {
+  opacity: 0.2;
+  filter: grayscale(0.2) sepia(0.12) contrast(0.9);
+  mix-blend-mode: multiply;
+}
+
+:root[data-skin="jojo"] .stellar-backdrop__art--jojo {
+  opacity: 0.32;
+  filter: brightness(0.66) saturate(1.08) contrast(1.05);
+}
+
+:root[data-skin="jojo"][data-theme="light"] .stellar-backdrop__art--jojo {
+  opacity: 0.24;
+  filter: saturate(0.86) contrast(0.94);
+  mix-blend-mode: multiply;
+}
+
+:root[data-skin="qihun"] .stellar-backdrop__art--qihun {
+  opacity: 0.62;
+  filter: brightness(0.7) saturate(0.72) contrast(1.02);
+}
+
+:root[data-skin="qihun"][data-theme="light"] .stellar-backdrop__art--qihun {
+  opacity: 0.22;
+  filter: sepia(0.14) saturate(0.66) contrast(0.91);
+  mix-blend-mode: multiply;
+}
+
+.stellar-backdrop__identity {
+  position: absolute;
+  z-index: 1;
+  top: 17%;
+  left: calc(var(--sidebar-width) + 38px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent-strong);
+  opacity: 0.34;
+  text-shadow: 0 3px 24px color-mix(in srgb, var(--app-bg) 88%, transparent);
+}
+
+.stellar-backdrop__identity strong {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-size: clamp(33px, 3vw, 54px);
+  font-weight: 280;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  writing-mode: vertical-rl;
+}
+
+.stellar-backdrop__identity small {
+  align-self: flex-end;
+  padding-bottom: 2px;
+  border-bottom: 1px solid currentColor;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+}
+
+.stellar-backdrop__identity--jojo {
+  top: 14%;
+  color: var(--accent);
+  opacity: 0.42;
+  transform: rotate(-4deg);
+}
+
+.stellar-backdrop__identity--jojo strong,
+.stellar-backdrop__identity--jojo small { writing-mode: horizontal-tb; }
+.stellar-backdrop__identity--jojo strong { font-size: clamp(35px, 3.3vw, 58px); font-weight: 860; letter-spacing: -0.06em; }
+.stellar-backdrop__identity--kuroshitsuji { color: color-mix(in srgb, var(--text) 72%, var(--accent)); opacity: .27; }
+.stellar-backdrop__identity--qihun { color: var(--accent-strong); opacity: .29; }
+
 .stellar-backdrop::before,
 .stellar-backdrop::after {
   position: absolute;
@@ -380,6 +481,180 @@
   margin-left: auto;
   border-color: transparent;
   background: transparent;
+}
+
+.global-model {
+  position: relative;
+  margin: 0 0 8px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at 88% 18%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%),
+    linear-gradient(120deg, color-mix(in srgb, var(--accent) 7%, var(--surface)), var(--surface));
+  box-shadow: inset 0 1px color-mix(in srgb, white 4%, transparent);
+}
+
+.global-model::after {
+  position: absolute;
+  right: -22px;
+  bottom: 15px;
+  width: 83px;
+  height: 25px;
+  content: "";
+  border: 1px solid color-mix(in srgb, var(--accent-warm) 28%, transparent);
+  border-color: color-mix(in srgb, var(--accent-warm) 28%, transparent) transparent transparent;
+  border-radius: 50%;
+  transform: rotate(-12deg);
+  pointer-events: none;
+}
+
+.global-model__header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  padding: 0 2px 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.global-model__header > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 760;
+  letter-spacing: .14em;
+}
+
+.global-model__header > span i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-faint) 8%, transparent);
+}
+
+.global-model.is-online .global-model__header > span i {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 10%, transparent), 0 0 8px color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+.global-model.is-busy .global-model__header > span i {
+  background: var(--accent-strong);
+  animation: capability-breathe 1.1s ease-in-out infinite;
+}
+
+.global-model__header small {
+  color: var(--text-faint);
+  font-size: 7px;
+}
+
+.global-model__selector {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-height: 42px;
+  padding: 5px 7px;
+  grid-template-columns: 30px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-elevated) 74%, transparent);
+  color: var(--text-soft);
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.global-model__selector:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border-strong));
+  background: var(--surface-hover);
+}
+
+.global-model__selector:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.global-model__mark {
+  position: relative;
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.global-model__mark i {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--panel-elevated);
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.global-model.is-offline .global-model__mark i { background: var(--text-faint); }
+
+.global-model__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.global-model__copy small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-model__copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 670;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-model__selector > svg {
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.global-model__selector select {
+  position: absolute;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  inset: 0;
+  appearance: none;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.global-model__selector select:disabled { cursor: not-allowed; }
+
+.global-model > p {
+  position: relative;
+  z-index: 1;
+  margin: 6px 2px 0;
+  color: var(--text-faint);
+  font-size: 7px;
+  line-height: 1.4;
 }
 
 .project-switcher {
@@ -829,10 +1104,6 @@
   position: absolute;
   right: 8px;
   pointer-events: none;
-}
-
-.model-control select {
-  width: min(210px, 18vw);
 }
 
 .thinking-control {
@@ -2337,7 +2608,7 @@
 .command-palette__footer { display: flex; height: 34px; padding: 0 14px; align-items: center; gap: 14px; border-top: 1px solid var(--border); color: var(--text-faint); font-family: var(--font-mono); font-size: 7px; }
 .command-palette__footer span:last-child { display: flex; margin-left: auto; align-items: center; gap: 4px; color: var(--accent); }
 
-.settings-dialog { width: min(760px, calc(100vw - 36px)); }
+.settings-dialog { width: min(940px, calc(100vw - 36px)); }
 .settings-scroll { max-height: calc(100vh - 150px); padding: 4px 19px 20px; overflow: auto; }
 .settings-section { padding: 16px 0 8px; border-bottom: 1px solid var(--border); }
 .settings-section:last-child { border-bottom: 0; }
@@ -2345,7 +2616,7 @@
 .settings-section__heading > span { color: var(--text-soft); font-size: 10px; font-weight: 690; }
 .settings-section__heading small { font-size: 8px; }
 .settings-section--skins { padding-top: 12px; }
-.skin-options { display: grid; margin-top: 7px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.skin-options { display: grid; margin-top: 7px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .skin-option {
   position: relative;
   display: flex;
@@ -2369,6 +2640,12 @@
 .skin-option--stella .skin-option__preview i { position: absolute; z-index: 1; top: 25px; right: 35px; width: 5px; height: 5px; border-radius: 50%; background: #ffc7a5; box-shadow: -96px 31px 0 rgba(255,255,255,.45), -58px -10px 0 #a998ff, 23px 29px 0 #8cddd5, 0 0 12px #ffad7a; }
 .skin-option--chenxi .skin-option__preview { background-image: url("../assets/skins/chenxi.png"); background-position: 70% 25%; }
 .skin-option--dingyang .skin-option__preview { background-image: url("../assets/skins/dingyang.png"); background-position: 74% 22%; }
+.skin-option--xuri .skin-option__preview { background-image: url("../assets/skins/xuri.png"); background-position: 78% 30%; }
+.skin-option--yuehua .skin-option__preview { background-image: url("../assets/skins/yuehua.png"); background-position: 78% 22%; }
+.skin-option--kuroshitsuji .skin-option__preview { background-image: url("../assets/skins/kuroshitsuji.png"); background-position: 83% 36%; }
+.skin-option--jojo .skin-option__preview { background-image: url("../assets/skins/jojo.png"); background-position: 65% 50%; }
+.skin-option--qihun .skin-option__preview { background-image: url("../assets/skins/qihun.png"); background-position: 80% 40%; }
+.skin-option__preview > img { position: absolute; z-index: 1; width: 100%; height: 100%; inset: 0; object-fit: cover; object-position: center; }
 .skin-option__copy { display: flex; min-height: 92px; padding: 10px 11px 11px; flex-direction: column; }
 .skin-option__copy > span { display: flex; align-items: baseline; justify-content: space-between; gap: 7px; }
 .skin-option__copy strong { color: var(--text); font-size: 12px; font-weight: 700; }
@@ -2377,6 +2654,17 @@
 .skin-option__copy > i { margin-top: auto; padding-top: 8px; color: var(--text-faint); font-family: var(--font-mono); font-size: 6.5px; font-style: normal; letter-spacing: .06em; }
 .skin-option__check { position: absolute; z-index: 2; top: 8px; right: 8px; display: grid; width: 23px; height: 23px; place-items: center; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; background: rgba(8,11,23,.48); color: white; backdrop-filter: blur(8px); }
 .skin-option:not(.is-active) .skin-option__check { opacity: 0; }
+.skin-artwork-control { display: grid; min-height: 78px; margin-top: 10px; padding: 9px; grid-template-columns: 96px minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: color-mix(in srgb, var(--panel-elevated) 66%, transparent); }
+.skin-artwork-control__preview { display: block; width: 96px; height: 58px; overflow: hidden; border: 1px solid var(--border); border-radius: calc(var(--radius-sm) - 2px); background: var(--app-bg); }
+.skin-artwork-control__preview .skin-option__preview { height: 100%; border: 0; }
+.skin-artwork-control__copy { display: flex; min-width: 0; flex-direction: column; }
+.skin-artwork-control__copy strong { color: var(--text); font-size: 10px; }
+.skin-artwork-control__copy small { margin-top: 3px; color: var(--text-muted); font-size: 7.5px; line-height: 1.45; }
+.skin-artwork-control__copy i { margin-top: 4px; color: var(--text-faint); font-family: var(--font-mono); font-size: 6.5px; font-style: normal; letter-spacing: .04em; }
+.skin-artwork-control__actions { display: flex; align-items: center; gap: 6px; }
+.skin-artwork-control__actions button { display: inline-flex; min-height: 34px; padding: 0 10px; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-muted); font-size: 8px; white-space: nowrap; }
+.skin-artwork-control__actions button:first-child { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); background: var(--accent-soft); color: var(--text); }
+.skin-artwork-control__actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .theme-options { display: grid; margin-top: 5px; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .theme-options button { display: flex; min-height: 46px; padding: 0 11px; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text-muted); font-size: 9px; }
 .theme-options button:hover { background: var(--surface-hover); }
@@ -2684,8 +2972,113 @@
 :root[data-skin="dingyang"] .toggle span { border-radius: 1px; }
 :root[data-skin="dingyang"] .skin-option__check { border-radius: 3px; }
 
+/* ── 旭日 / Rising Sun ─────────────────────────────────────────────── */
+:root[data-skin="xuri"] .app-shell {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--app-bg) 98%, transparent) 0 45%, color-mix(in srgb, var(--app-bg) 72%, transparent) 73%, transparent), var(--app-bg);
+}
+:root[data-skin="xuri"] .sidebar,
+:root[data-skin="xuri"] .inspector { background: color-mix(in srgb, var(--panel) 94%, transparent); backdrop-filter: var(--blur); }
+:root[data-skin="xuri"] .topbar { background: linear-gradient(90deg, color-mix(in srgb, var(--panel) 88%, transparent), color-mix(in srgb, var(--panel) 58%, transparent)); }
+:root[data-skin="xuri"] .brand__mark { border-color: color-mix(in srgb, var(--accent-warm) 40%, var(--border)); background: radial-gradient(circle, var(--accent) 0 29%, color-mix(in srgb, var(--accent) 18%, transparent) 31% 44%, transparent 46%), var(--panel-solid); }
+:root[data-skin="xuri"] .brand__mark > svg { opacity: .15; }
+:root[data-skin="xuri"] .brand__orbit { border-color: color-mix(in srgb, var(--accent-warm) 55%, transparent); transform: rotate(-10deg); }
+:root[data-skin="xuri"] .brand__signature { color: color-mix(in srgb, var(--text) 76%, var(--accent-warm)); }
+:root[data-skin="xuri"] .composer,
+:root[data-skin="xuri"] .modal-panel { box-shadow: var(--shadow), inset 0 1px color-mix(in srgb, var(--accent-warm) 13%, transparent); }
+:root[data-skin="xuri"] .stellar-backdrop svg { opacity: .08; }
+:root[data-skin="xuri"] .empty-conversation__constellation { border-color: color-mix(in srgb, var(--accent) 48%, transparent); background: radial-gradient(circle at center, var(--accent) 0 20%, transparent 22%); }
+
+/* ── 月华 / Moonlit Bloom ─────────────────────────────────────────── */
+:root[data-skin="yuehua"] .app-shell {
+  background: radial-gradient(circle at 78% 12%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 28%), linear-gradient(90deg, color-mix(in srgb, var(--app-bg) 98%, transparent) 0 43%, color-mix(in srgb, var(--app-bg) 66%, transparent) 75%, transparent), var(--app-bg);
+}
+:root[data-skin="yuehua"] .sidebar,
+:root[data-skin="yuehua"] .inspector,
+:root[data-skin="yuehua"] .topbar { background: color-mix(in srgb, var(--panel) 86%, transparent); backdrop-filter: var(--blur); }
+:root[data-skin="yuehua"] .brand__mark { border-color: color-mix(in srgb, var(--accent-strong) 33%, var(--border)); background: radial-gradient(circle at 40% 38%, var(--accent-strong) 0 28%, transparent 30%), color-mix(in srgb, var(--panel-solid) 88%, var(--accent)); box-shadow: inset -8px -4px 0 color-mix(in srgb, var(--app-bg) 92%, transparent), 0 0 18px color-mix(in srgb, var(--accent) 20%, transparent); }
+:root[data-skin="yuehua"] .brand__mark > svg { opacity: .12; }
+:root[data-skin="yuehua"] .brand__orbit { width: 50px; height: 28px; border-color: color-mix(in srgb, var(--accent-warm) 45%, transparent); }
+:root[data-skin="yuehua"] .composer,
+:root[data-skin="yuehua"] .modal-panel,
+:root[data-skin="yuehua"] .command-palette { border-color: color-mix(in srgb, var(--accent) 16%, var(--border)); box-shadow: var(--shadow), inset 0 1px color-mix(in srgb, white 8%, transparent); }
+:root[data-skin="yuehua"] .stellar-backdrop svg { opacity: .12; }
+:root[data-skin="yuehua"] .stellar-backdrop__orbit,
+:root[data-skin="yuehua"] .stellar-backdrop__trail { stroke-dasharray: 1 10; stroke-linecap: round; }
+:root[data-skin="yuehua"] .empty-conversation__constellation { border-color: color-mix(in srgb, var(--accent) 38%, transparent); box-shadow: inset -18px -4px 0 color-mix(in srgb, var(--app-bg) 82%, transparent), 0 0 28px color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ── 黑执事 / Nocturne Contract ───────────────────────────────────── */
+:root[data-skin="kuroshitsuji"] .app-shell {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--app-bg) 99%, transparent) 0 52%, color-mix(in srgb, var(--app-bg) 70%, transparent) 78%, transparent), var(--app-bg);
+}
+:root[data-skin="kuroshitsuji"] .sidebar,
+:root[data-skin="kuroshitsuji"] .inspector { background: color-mix(in srgb, var(--panel) 97%, transparent); border-color: color-mix(in srgb, var(--accent-warm) 22%, var(--border)); backdrop-filter: var(--blur); }
+:root[data-skin="kuroshitsuji"] .topbar { background: color-mix(in srgb, var(--panel) 86%, transparent); border-bottom-color: color-mix(in srgb, var(--accent-warm) 20%, var(--border)); }
+:root[data-skin="kuroshitsuji"] .brand__mark { border: 1px solid color-mix(in srgb, var(--accent-warm) 42%, var(--border)); border-radius: 50% 50% 46% 46%; background: radial-gradient(circle, var(--accent) 0 8%, transparent 10%), var(--panel-solid); box-shadow: inset 0 0 0 4px var(--app-bg), inset 0 0 0 5px color-mix(in srgb, var(--accent-warm) 32%, transparent); }
+:root[data-skin="kuroshitsuji"] .brand__mark > svg { color: color-mix(in srgb, var(--text) 72%, var(--accent-warm)); opacity: .6; }
+:root[data-skin="kuroshitsuji"] .brand__orbit { border-color: color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 50% 50% 45% 45%; }
+:root[data-skin="kuroshitsuji"] .brand__signature { color: color-mix(in srgb, var(--text) 82%, var(--accent)); }
+:root[data-skin="kuroshitsuji"] .composer,
+:root[data-skin="kuroshitsuji"] .modal-panel,
+:root[data-skin="kuroshitsuji"] .command-palette { border-color: color-mix(in srgb, var(--accent-warm) 22%, var(--border)); box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--accent-warm) 5%, transparent); }
+:root[data-skin="kuroshitsuji"] .new-session-button { background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 17%, var(--surface)), var(--surface)); }
+:root[data-skin="kuroshitsuji"] .stellar-backdrop svg { opacity: .05; }
+:root[data-skin="kuroshitsuji"] .toggle,
+:root[data-skin="kuroshitsuji"] .toggle span,
+:root[data-skin="kuroshitsuji"] .skin-option__check { border-radius: 2px; }
+
+/* ── JOJO / Morioh × Golden Wind ─────────────────────────────────── */
+:root[data-skin="jojo"] .app-shell {
+  background: linear-gradient(112deg, color-mix(in srgb, var(--app-bg) 99%, transparent) 0 44%, color-mix(in srgb, var(--app-bg) 74%, transparent) 66%, transparent), radial-gradient(circle at 84% 23%, color-mix(in srgb, var(--accent-warm) 18%, transparent), transparent 30%), var(--app-bg);
+}
+:root[data-skin="jojo"] .sidebar,
+:root[data-skin="jojo"] .inspector { background: color-mix(in srgb, var(--panel) 94%, transparent); border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); backdrop-filter: var(--blur); }
+:root[data-skin="jojo"] .topbar { background: linear-gradient(90deg, color-mix(in srgb, var(--panel) 90%, transparent), color-mix(in srgb, var(--accent-warm) 8%, var(--panel))); }
+:root[data-skin="jojo"] .brand__mark { border: 2px solid var(--accent); border-radius: 6px 18px 6px 18px; background: linear-gradient(135deg, var(--accent-warm), color-mix(in srgb, var(--accent-warm) 24%, var(--panel-solid)) 48%, var(--panel-solid) 49%); color: var(--accent-strong); transform: rotate(-5deg); box-shadow: 4px 4px 0 color-mix(in srgb, var(--accent-warm) 34%, transparent); }
+:root[data-skin="jojo"] .brand__orbit { width: 48px; height: 22px; border: 2px solid color-mix(in srgb, var(--aqua-300) 70%, transparent); border-radius: 50% 12% 50% 12%; transform: rotate(20deg); }
+:root[data-skin="jojo"] .brand__signature { color: var(--accent-strong); text-shadow: 2px 2px 0 color-mix(in srgb, var(--accent-warm) 42%, transparent); }
+:root[data-skin="jojo"] .composer,
+:root[data-skin="jojo"] .modal-panel,
+:root[data-skin="jojo"] .command-palette { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: var(--shadow); }
+:root[data-skin="jojo"] .suggestion-grid button { border-left: 3px solid var(--accent-warm); }
+:root[data-skin="jojo"] .suggestion-grid button:nth-child(even) { border-left-color: var(--aqua-300); }
+:root[data-skin="jojo"] .stellar-backdrop svg { opacity: .18; }
+:root[data-skin="jojo"] .stellar-backdrop__orbit,
+:root[data-skin="jojo"] .stellar-backdrop__trail { stroke-width: 1.25; stroke-dasharray: 9 7; }
+:root[data-skin="jojo"] .skin-option__check { border-radius: 5px 12px 5px 12px; }
+
+/* ── 棋魂 / Spirit of Go ──────────────────────────────────────────── */
+:root[data-skin="qihun"] .app-shell {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--app-bg) 99%, transparent) 0 46%, color-mix(in srgb, var(--app-bg) 69%, transparent) 76%, transparent), var(--app-bg);
+}
+:root[data-skin="qihun"] .workspace::before {
+  position: absolute;
+  z-index: -1;
+  content: "";
+  inset: 0;
+  background-image: linear-gradient(color-mix(in srgb, var(--accent) 3%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--accent) 3%, transparent) 1px, transparent 1px);
+  background-size: 29px 29px;
+  mask-image: linear-gradient(to right, black, transparent 76%);
+  pointer-events: none;
+}
+:root[data-skin="qihun"] .sidebar,
+:root[data-skin="qihun"] .inspector,
+:root[data-skin="qihun"] .topbar { background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: var(--blur); }
+:root[data-skin="qihun"] .brand__mark { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); background: radial-gradient(circle at 36% 42%, #eee9dd 0 15%, transparent 17%), radial-gradient(circle at 66% 62%, #101419 0 16%, transparent 18%), color-mix(in srgb, var(--accent) 12%, var(--panel-solid)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 13%, transparent); }
+:root[data-skin="qihun"] .brand__mark > svg { opacity: .08; }
+:root[data-skin="qihun"] .brand__orbit { border-color: color-mix(in srgb, var(--accent-warm) 48%, transparent); }
+:root[data-skin="qihun"] .brand__signature { color: color-mix(in srgb, var(--text) 82%, var(--accent)); }
+:root[data-skin="qihun"] .composer,
+:root[data-skin="qihun"] .modal-panel { border-color: color-mix(in srgb, var(--accent) 20%, var(--border)); box-shadow: var(--shadow); }
+:root[data-skin="qihun"] .stellar-backdrop svg { opacity: .09; }
+:root[data-skin="qihun"] .empty-conversation__constellation { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: radial-gradient(circle at 35% 42%, var(--text) 0 12%, transparent 14%), radial-gradient(circle at 65% 62%, var(--app-bg) 0 13%, color-mix(in srgb, var(--text) 32%, transparent) 14% 15%, transparent 16%); }
+
 :root[data-skin="chenxi"][data-theme="light"] .startup-screen,
-:root[data-skin="dingyang"][data-theme="light"] .startup-screen { background: color-mix(in srgb, var(--app-bg) 90%, transparent); }
+:root[data-skin="dingyang"][data-theme="light"] .startup-screen,
+:root[data-skin="xuri"][data-theme="light"] .startup-screen,
+:root[data-skin="yuehua"][data-theme="light"] .startup-screen,
+:root[data-skin="kuroshitsuji"][data-theme="light"] .startup-screen,
+:root[data-skin="jojo"][data-theme="light"] .startup-screen,
+:root[data-skin="qihun"][data-theme="light"] .startup-screen { background: color-mix(in srgb, var(--app-bg) 90%, transparent); }
 
 select option {
   background: var(--panel-solid);
@@ -2758,7 +3151,6 @@ summary {
   .thinking-control { display: none; }
   .topbar__task-bridge span { display: none; }
   .topbar__task-bridge { width: 31px; padding: 0; }
-  .model-control select { width: 145px; }
   .conversation-content { width: calc(100% - 26px); padding-top: 24px; }
   .composer-wrap { width: calc(100% - 20px); }
   .suggestion-grid { grid-template-columns: 1fr; }
@@ -2773,6 +3165,9 @@ summary {
   .context-note { display: none; }
   .settings-dialog { width: calc(100vw - 24px); }
   .skin-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skin-artwork-control { grid-template-columns: 86px minmax(0, 1fr); }
+  .skin-artwork-control__preview { width: 86px; }
+  .skin-artwork-control__actions { grid-column: 1 / -1; justify-content: flex-end; }
 }
 
 @media (max-width: 620px) {
@@ -2780,13 +3175,16 @@ summary {
   .titlebar-drag { right: 123px; }
   .topbar { padding-right: 130px; }
   .topbar__controls > .icon-button { display: none; }
-  .model-control select { width: 120px; }
   .message--assistant { gap: 9px; }
   .assistant-avatar { width: 25px; height: 25px; }
   .composer-tool--commands span { display: none; }
   .queue-mode button { min-width: 33px; }
   .theme-options { grid-template-columns: 1fr; }
   .skin-options { grid-template-columns: 1fr; }
+  .skin-artwork-control { grid-template-columns: 1fr; }
+  .skin-artwork-control__preview { display: none; }
+  .skin-artwork-control__actions { grid-column: auto; justify-content: stretch; }
+  .skin-artwork-control__actions button { flex: 1; justify-content: center; }
   .shortcut-grid { grid-template-columns: 1fr; }
   .settings-about { align-items: flex-start; flex-direction: column; gap: 8px; }
 }

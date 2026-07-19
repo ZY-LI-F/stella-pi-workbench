@@ -8,6 +8,7 @@ import type {
   StellaDesktopApi,
 } from "../shared/contracts";
 import type { CapabilityHealthSnapshot, CapabilityName } from "../shared/capabilities";
+import type { SkinArtworkDescriptor, SkinId } from "../shared/skin-artwork";
 import type {
   BoardBootstrap,
   CreateAutopilotInput,
@@ -35,6 +36,12 @@ const api: StellaDesktopApi = Object.freeze({
   respondToExtension: (response: PiExtensionResponse) =>
     ipcRenderer.invoke("stella:extension-response", response) as Promise<void>,
   chooseProject: () => ipcRenderer.invoke("stella:choose-project") as Promise<ProjectSelection | null>,
+  skinArtworkInitialize: () =>
+    ipcRenderer.invoke("stella:skin-artwork:initialize") as Promise<readonly SkinArtworkDescriptor[]>,
+  chooseSkinArtwork: (skin: SkinId) =>
+    ipcRenderer.invoke("stella:skin-artwork:choose", skin) as Promise<SkinArtworkDescriptor | null>,
+  resetSkinArtwork: (skin: SkinId) =>
+    ipcRenderer.invoke("stella:skin-artwork:reset", skin) as Promise<void>,
   openProject: (path: string, trusted: boolean) =>
     ipcRenderer.invoke("stella:open-project", path, trusted) as Promise<RuntimeBootstrap>,
   revealPath: (path: string) => ipcRenderer.invoke("stella:reveal-path", path) as Promise<void>,

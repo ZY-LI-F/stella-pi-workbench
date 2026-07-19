@@ -94,6 +94,7 @@ describe("Capability Health", () => {
       })),
       onEvent: vi.fn(() => () => undefined),
       chooseProject: vi.fn(async () => null),
+      skinArtworkInitialize: vi.fn(async () => Object.freeze([])),
       windowAction: vi.fn(async () => undefined),
     } as unknown as StellaDesktopApi;
 

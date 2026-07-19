@@ -46,7 +46,7 @@ afterEach(() => {
 
 describe("preferences", () => {
   it("parses every supported skin and rejects unknown values", () => {
-    for (const skin of ["stella", "chenxi", "dingyang"] as const) {
+    for (const skin of ["stella", "chenxi", "dingyang", "xuri", "yuehua", "kuroshitsuji", "jojo", "qihun"] as const) {
       expect(parsePreferences(JSON.stringify({ ...LEGACY_PREFERENCES, skin })).skin).toBe(skin);
     }
     expect(() => parsePreferences(JSON.stringify({ ...LEGACY_PREFERENCES, skin: "unknown" }))).toThrow(

@@ -25,6 +25,7 @@ import {
   assertAgentWorkspacePolicy,
   type WorkspaceLease,
 } from "./workspace-admission";
+import { resolveAgentRuntimeModel, type RuntimeModelSelection } from "../shared/runtime-model";
 
 export interface WorkflowAgentRuntime {
   readonly running: boolean;
@@ -58,6 +59,7 @@ interface OrchestratorDependencies {
   readonly runtimeFactory: WorkflowRuntimeFactory;
   readonly emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly admission: WorkspaceAdmission;
+  readonly globalModel: () => RuntimeModelSelection | undefined;
   readonly now?: () => string;
   readonly id?: () => string;
 }
@@ -119,6 +121,7 @@ export class WorkflowOrchestrator {
   readonly #runtimeFactory: WorkflowRuntimeFactory;
   readonly #emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly #admission: WorkspaceAdmission;
+  readonly #globalModel: () => RuntimeModelSelection | undefined;
   readonly #now: () => string;
   readonly #id: () => string;
   readonly #activeAgents = new Map<string, ActiveAgentRun>();
@@ -131,6 +134,7 @@ export class WorkflowOrchestrator {
     this.#runtimeFactory = dependencies.runtimeFactory;
     this.#emitBoardEvent = dependencies.emitBoardEvent;
     this.#admission = dependencies.admission;
+    this.#globalModel = dependencies.globalModel;
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#id = dependencies.id ?? randomUUID;
   }
@@ -471,6 +475,7 @@ export class WorkflowOrchestrator {
       settling: false,
     };
     this.#activeAgents.set(run.id, active);
+    const selectedModel = resolveAgentRuntimeModel(agent, this.#globalModel());
     try {
       if (this.#activeAgents.get(run.id) !== active) {
         try {
@@ -489,8 +494,8 @@ export class WorkflowOrchestrator {
           executionId: step.id,
           label: `${task.title} · ${step.name}`,
         }),
-        provider: agent.provider,
-        model: agent.model,
+        provider: selectedModel.provider,
+        model: selectedModel.model,
         thinking: agent.thinking,
         allowedTools: agent.allowedTools,
         appendSystemPrompt: requiredSkillsPrompt(agent),

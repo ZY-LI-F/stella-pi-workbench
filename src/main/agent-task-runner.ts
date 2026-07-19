@@ -2,6 +2,7 @@ import type { PiCommand, PiResponse, RuntimeSignal } from "../shared/contracts";
 import type { BoardBootstrap, BoardBridgeEvent } from "../shared/kanban";
 import { backgroundSessionName } from "../shared/session-policy";
 import type { PiRuntimeStartOptions } from "./pi-rpc-runtime";
+import { resolveAgentRuntimeModel, type RuntimeModelSelection } from "../shared/runtime-model";
 import { assertRequiredAgentSkills, requiredSkillsPrompt } from "./required-agent-skills";
 import { AgentTaskService, type ClaimedAgentTask } from "./agent-task-service";
 import {
@@ -31,6 +32,7 @@ interface AgentTaskRunnerDependencies {
   readonly runtimeFactory: AgentTaskRuntimeFactory;
   readonly emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly admission: WorkspaceAdmission;
+  readonly globalModel: () => RuntimeModelSelection | undefined;
 }
 
 interface ActiveExecution {
@@ -77,6 +79,7 @@ export class AgentTaskRunner {
   readonly #runtimeFactory: AgentTaskRuntimeFactory;
   readonly #emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly #admission: WorkspaceAdmission;
+  readonly #globalModel: () => RuntimeModelSelection | undefined;
   #active?: ActiveExecution;
   #waiting?: WaitingExecution;
   #drainPromise?: Promise<void>;
@@ -88,6 +91,7 @@ export class AgentTaskRunner {
     this.#runtimeFactory = dependencies.runtimeFactory;
     this.#emitBoardEvent = dependencies.emitBoardEvent;
     this.#admission = dependencies.admission;
+    this.#globalModel = dependencies.globalModel;
   }
 
   start(): void {
@@ -211,6 +215,7 @@ export class AgentTaskRunner {
     };
     this.#active = active;
     const agent = claimed.agentTask.agentSnapshot;
+    const selectedModel = resolveAgentRuntimeModel(agent, this.#globalModel());
     try {
       await runtime.start({
         cwd: claimed.task.projectPath,
@@ -221,8 +226,8 @@ export class AgentTaskRunner {
           executionId: claimed.agentTask.id,
           label: `${claimed.task.title} · ${agent.name}`,
         }),
-        provider: agent.provider,
-        model: agent.model,
+        provider: selectedModel.provider,
+        model: selectedModel.model,
         thinking: agent.thinking,
         allowedTools: agent.allowedTools,
         appendSystemPrompt: requiredSkillsPrompt(agent),

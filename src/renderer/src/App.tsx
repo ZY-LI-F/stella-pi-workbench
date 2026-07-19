@@ -23,13 +23,21 @@ import type {
   SlashCommandSummary,
   StellaDesktopApi,
 } from "@shared/contracts";
+import type { SkinArtworkDescriptor, SkinId } from "@shared/skin-artwork";
 import { usePiRuntime } from "./hooks/use-pi-runtime";
 import { useKanban } from "./hooks/use-kanban";
 import { useCapabilities } from "./hooks/use-capabilities";
 import { usePreferences } from "./hooks/use-preferences";
+import { useSkinArtwork } from "./hooks/use-skin-artwork";
 import type { SkinPreference } from "./lib/skins";
 import chenxiArtwork from "./assets/skins/chenxi.png";
 import dingyangArtwork from "./assets/skins/dingyang.png";
+import jojoArtwork from "./assets/skins/jojo.png";
+import kuroshitsujiArtwork from "./assets/skins/kuroshitsuji.png";
+import qihunArtwork from "./assets/skins/qihun.png";
+import xuriArtwork from "./assets/skins/xuri.png";
+import yuehuaArtwork from "./assets/skins/yuehua.png";
+import { skinDefinition } from "./lib/skins";
 import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
 import { Composer, type ComposerImage } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
@@ -98,13 +106,26 @@ function wasCancelled(value: unknown, command: string): boolean {
 const SKIN_ARTWORK: Readonly<Partial<Record<SkinPreference, string>>> = Object.freeze({
   chenxi: chenxiArtwork,
   dingyang: dingyangArtwork,
+  xuri: xuriArtwork,
+  yuehua: yuehuaArtwork,
+  kuroshitsuji: kuroshitsujiArtwork,
+  jojo: jojoArtwork,
+  qihun: qihunArtwork,
 });
 
-function SkinBackdrop({ skin }: { readonly skin: SkinPreference }) {
-  const artwork = SKIN_ARTWORK[skin];
+const ARTWORK_IDENTITIES = new Set<SkinPreference>(["xuri", "yuehua", "kuroshitsuji", "jojo", "qihun"]);
+
+function SkinBackdrop({ skin, customArtwork }: { readonly skin: SkinPreference; readonly customArtwork?: SkinArtworkDescriptor }) {
+  const artwork = customArtwork?.url ?? SKIN_ARTWORK[skin];
+  const definition = skinDefinition(skin);
   return (
     <div className="stellar-backdrop" aria-hidden="true">
       {artwork && <img className={`stellar-backdrop__art stellar-backdrop__art--${skin}`} src={artwork} alt="" />}
+      {ARTWORK_IDENTITIES.has(skin) && (
+        <span className={`stellar-backdrop__identity stellar-backdrop__identity--${skin}`}>
+          <strong>{definition.label}</strong><small>{definition.subtitle}</small>
+        </span>
+      )}
       <svg viewBox="0 0 1600 900" preserveAspectRatio="none">
         <path className="stellar-backdrop__orbit" d="M-120 240 C 240 40, 490 90, 710 310 S 1220 580, 1710 180" />
         <path className="stellar-backdrop__trail" d="M180 940 C 310 610, 650 690, 830 510 S 1260 120, 1640 380" />
@@ -120,6 +141,7 @@ export function App({ api }: AppProps) {
   const capabilities = useCapabilities(api);
   const { state } = controller;
   const [preferences, setPreferences] = usePreferences();
+  const skinArtwork = useSkinArtwork(api);
   const [draft, setDraft] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
@@ -127,6 +149,7 @@ export function App({ api }: AppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [modelChanging, setModelChanging] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("kanban");
   const [createTaskRequest, setCreateTaskRequest] = useState(0);
   const [createTaskDraft, setCreateTaskDraft] = useState<PiTaskDraft>();
@@ -140,6 +163,12 @@ export function App({ api }: AppProps) {
   const taskHealth = capabilitySnapshot?.task;
   const bootstrap = state.bootstrap;
   const piReady = piHealth?.state === "ready" && Boolean(bootstrap);
+
+  useEffect(() => {
+    if (!skinArtwork.loadError) return;
+    controller.notify(`自定义背景加载失败：${skinArtwork.loadError}`, "error");
+    skinArtwork.clearLoadError();
+  }, [skinArtwork.loadError]);
 
   useEffect(() => {
     const bootstrap = state.bootstrap;
@@ -230,14 +259,39 @@ export function App({ api }: AppProps) {
   };
 
   const setModel = async (model: ModelSummary) => {
-    await controller.command({ type: "set_model", provider: model.provider, modelId: model.id }, true);
-    controller.notify(`已切换到 ${model.name}`, "success");
+    setModelChanging(true);
+    try {
+      await controller.command({ type: "set_model", provider: model.provider, modelId: model.id }, true);
+      controller.notify(`全局模型已切换到 ${model.name}`, "success");
+    } catch (cause) {
+      controller.notify(`模型切换失败：${cause instanceof Error ? cause.message : String(cause)}`, "error");
+    } finally {
+      setModelChanging(false);
+    }
   };
 
   const setThinking = async (level: string) => {
     const valid = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
     if (!valid.has(level as ThinkingLevel)) throw new Error(`不支持的思考级别: ${level}`);
     await controller.command({ type: "set_thinking_level", level: level as ThinkingLevel }, true);
+  };
+
+  const chooseSkinArtwork = async (skin: SkinId) => {
+    try {
+      const changed = await skinArtwork.choose(skin);
+      if (changed) controller.notify(`${skinDefinition(skin).label} 已使用自定义背景`, "success");
+    } catch (cause) {
+      controller.notify(`更换背景失败：${cause instanceof Error ? cause.message : String(cause)}`, "error");
+    }
+  };
+
+  const resetSkinArtwork = async (skin: SkinId) => {
+    try {
+      await skinArtwork.reset(skin);
+      controller.notify(`${skinDefinition(skin).label} 已恢复内置背景`, "success");
+    } catch (cause) {
+      controller.notify(`恢复背景失败：${cause instanceof Error ? cause.message : String(cause)}`, "error");
+    }
   };
 
   const sendPrompt = async (message: string, images: readonly ComposerImage[]) => {
@@ -341,7 +395,7 @@ export function App({ api }: AppProps) {
 
   return (
     <div className={`app-shell app-shell--${workspaceView} ${workspaceView === "chat" && inspectorOpen ? "has-inspector" : ""} ${terminalOpen ? "has-terminal" : ""}`}>
-      <SkinBackdrop skin={preferences.skin} />
+      <SkinBackdrop skin={preferences.skin} customArtwork={skinArtwork.bySkin[preferences.skin]} />
       <div className="titlebar-drag" />
       <WindowControls api={api} />
       <Sidebar
@@ -350,6 +404,7 @@ export function App({ api }: AppProps) {
         skin={preferences.skin}
         open={sidebarOpen}
         activeView={workspaceView}
+        modelChanging={modelChanging}
         onClose={() => setSidebarOpen(false)}
         onNewSession={() => void newSession()}
         onNewTask={newTask}
@@ -364,6 +419,7 @@ export function App({ api }: AppProps) {
           setSidebarOpen(false);
           setSettingsOpen(true);
         }}
+        onModelChange={(model) => void setModel(model)}
       />
 
       {workspaceView === "chat" && bootstrap && piReady ? <main className="workspace">
@@ -375,7 +431,6 @@ export function App({ api }: AppProps) {
           onOpenSidebar={() => setSidebarOpen(true)}
           onToggleInspector={() => setInspectorOpen((value) => !value)}
           onOpenSettings={() => setSettingsOpen(true)}
-          onModelChange={(model) => void setModel(model)}
           onThinkingChange={(level) => void setThinking(level)}
           onAbortRetry={() => void controller.command({ type: "abort_retry" })}
           onSolidifyTask={solidifyCurrentSession}
@@ -509,7 +564,11 @@ export function App({ api }: AppProps) {
         <SettingsDialog
           bootstrap={bootstrap}
           preferences={preferences}
+          customArtwork={skinArtwork.bySkin}
+          artworkBusySkin={skinArtwork.busySkin}
           onPreferencesChange={setPreferences}
+          onChooseSkinArtwork={(skin) => void chooseSkinArtwork(skin)}
+          onResetSkinArtwork={(skin) => void resetSkinArtwork(skin)}
           onAutoCompactionChange={(enabled) => void controller.command({ type: "set_auto_compaction", enabled }, true)}
           onSteeringModeChange={(mode) => void controller.command({ type: "set_steering_mode", mode }, true)}
           onFollowUpModeChange={(mode) => void controller.command({ type: "set_follow_up_mode", mode }, true)}

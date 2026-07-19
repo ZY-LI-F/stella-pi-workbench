@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isSkinId } from "@shared/skin-artwork";
 import type { SkinPreference } from "../lib/skins";
 
 export type ThemePreference = "system" | "dark" | "light";
@@ -26,7 +27,7 @@ function isPreferences(value: unknown): value is Preferences {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    (record.skin === "stella" || record.skin === "chenxi" || record.skin === "dingyang") &&
+    isSkinId(record.skin) &&
     (record.theme === "system" || record.theme === "dark" || record.theme === "light") &&
     (record.density === "comfortable" || record.density === "compact") &&
     typeof record.autoRetry === "boolean" &&

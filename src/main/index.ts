@@ -1,6 +1,6 @@
-import { readFile, stat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import {
   SessionManager,
@@ -12,6 +12,8 @@ import {
   clipboard,
   dialog,
   ipcMain,
+  net,
+  protocol,
   shell,
 } from "electron";
 import type {
@@ -48,6 +50,7 @@ import {
   type UpdateSquadInput,
 } from "../shared/kanban";
 import { BUILTIN_ORCHESTRATION_CATALOG } from "../shared/orchestration-catalog";
+import { runtimeModelSelectionFromSession, type RuntimeModelSelection } from "../shared/runtime-model";
 import { AgentTaskRunner, type AgentTaskRuntimeFactory } from "./agent-task-runner";
 import { AgentTaskService } from "./agent-task-service";
 import { AutopilotService } from "./autopilot-service";
@@ -65,9 +68,19 @@ import { WebhookServer, webhookMaxBytesFromEnvironment, webhookPortFromEnvironme
 import { WorkspaceAdmission } from "./workspace-admission";
 import { visibleInteractiveSessions } from "../shared/session-policy";
 import { resolveTaskSessionTarget } from "../shared/task-session-bridge";
+import { isSkinId, type SkinArtworkDescriptor, type SkinId } from "../shared/skin-artwork";
+import { SkinArtworkService, type StoredSkinArtwork } from "./skin-artwork-service";
 
 const rpcEntryPath = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
 const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
+const SKIN_ARTWORK_SCHEME = "stella-artwork";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: SKIN_ARTWORK_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
+]);
 
 interface CurrentProject {
   readonly cwd: string;
@@ -138,6 +151,7 @@ function validatedExtensionResponse(value: unknown): PiExtensionResponse {
 
 let mainWindow: BrowserWindow | null = null;
 let currentProject: CurrentProject | null = null;
+let globalModelSelection: RuntimeModelSelection | undefined;
 let stateStore: StateStore;
 let boardStore: BoardStore;
 let boardService: BoardService;
@@ -149,6 +163,7 @@ let squadService: SquadService;
 let autopilotService: AutopilotService;
 let scheduleRunner: ScheduleRunner;
 let webhookServer: WebhookServer;
+let skinArtworkService: SkinArtworkService;
 const singleInstanceLock = app.requestSingleInstanceLock();
 
 function broadcast(source: "pi" | "runtime" | "board" | "capability", payload: unknown): void {
@@ -703,6 +718,7 @@ async function hydrate(): Promise<RuntimeBootstrap> {
     ]);
 
   const state = dataFromResponse<RuntimeBootstrap["state"]>(stateResponse, "get_state");
+  globalModelSelection = runtimeModelSelectionFromSession(state.model);
   const messages = dataFromResponse<RpcMessagesData>(messagesResponse, "get_messages").messages;
   const models = dataFromResponse<RpcModelsData>(modelsResponse, "get_available_models").models.map(mapModel);
   const commands = dataFromResponse<RpcCommandsData>(commandsResponse, "get_commands").commands.map(mapCommand);
@@ -750,6 +766,54 @@ async function initializeRuntime(): Promise<RuntimeBootstrap> {
     capabilityHealth.set("pi", "error", errorMessage(cause));
     throw cause;
   }
+}
+
+function validatedSkinId(value: unknown): SkinId {
+  if (!isSkinId(value)) throw new Error(`不支持的皮肤: ${String(value)}`);
+  return value;
+}
+
+function skinArtworkDescriptor(record: StoredSkinArtwork): SkinArtworkDescriptor {
+  return Object.freeze({
+    skin: record.skin,
+    url: `${SKIN_ARTWORK_SCHEME}://skin/${record.skin}?v=${encodeURIComponent(String(record.updatedAt))}`,
+    updatedAt: record.updatedAt,
+  });
+}
+
+async function initializeSkinArtwork(): Promise<readonly SkinArtworkDescriptor[]> {
+  const records = await skinArtworkService.list();
+  return Object.freeze(records.map(skinArtworkDescriptor));
+}
+
+async function chooseSkinArtwork(value: unknown): Promise<SkinArtworkDescriptor | null> {
+  const skin = validatedSkinId(value);
+  const options: Electron.OpenDialogOptions = {
+    title: `为 ${skin} 皮肤选择背景图片`,
+    buttonLabel: "使用此图片",
+    properties: ["openFile"],
+    filters: [{ name: "背景图片（最大 25 MB）", extensions: ["png", "jpg", "jpeg", "webp"] }],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  const path = result.filePaths[0];
+  if (result.canceled || !path) return null;
+  return skinArtworkDescriptor(await skinArtworkService.install(skin, path));
+}
+
+function registerSkinArtworkProtocol(): void {
+  protocol.handle(SKIN_ARTWORK_SCHEME, async (request) => {
+    if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
+    const url = new URL(request.url);
+    const skinValue = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+    if (url.hostname !== "skin" || !isSkinId(skinValue)) {
+      return new Response("Invalid skin artwork request", { status: 400 });
+    }
+    const artwork = await skinArtworkService.find(skinValue);
+    if (!artwork) return new Response("Skin artwork not found", { status: 404 });
+    return net.fetch(pathToFileURL(artwork.path).toString());
+  });
 }
 
 async function chooseProject(): Promise<ProjectSelection | null> {
@@ -869,6 +933,7 @@ async function initializeTaskCapability(): Promise<void> {
       runtimeFactory: workflowRuntimeFactory,
       emitBoardEvent: (event) => broadcast("board", event),
       admission: workspaceAdmission,
+      globalModel: () => globalModelSelection,
     });
     agentTaskService = new AgentTaskService({
       repository: boardStore,
@@ -907,6 +972,7 @@ async function initializeTaskCapability(): Promise<void> {
       runtimeFactory: agentTaskRuntimeFactory,
       emitBoardEvent: (event) => broadcast("board", event),
       admission: workspaceAdmission,
+      globalModel: () => globalModelSelection,
     });
     agentTaskRunner.start();
     capabilityHealth.set("task", "ready");
@@ -952,6 +1018,11 @@ function registerIpcHandlers(): void {
     return runtime.respondToExtension(validatedExtensionResponse(response));
   });
   ipcMain.handle("stella:choose-project", () => chooseProject());
+  ipcMain.handle("stella:skin-artwork:initialize", () => initializeSkinArtwork());
+  ipcMain.handle("stella:skin-artwork:choose", (_event, skin: unknown) => chooseSkinArtwork(skin));
+  ipcMain.handle("stella:skin-artwork:reset", async (_event, skin: unknown) => {
+    await skinArtworkService.reset(validatedSkinId(skin));
+  });
   ipcMain.handle("stella:open-project", (_event, path: unknown, trusted: unknown) => {
     if (typeof trusted !== "boolean") throw new Error("项目 trusted 参数必须是布尔值");
     return openProject(requiredString(path, "项目路径"), trusted);
@@ -1117,6 +1188,18 @@ if (!singleInstanceLock) {
 
   void app.whenReady().then(() => {
     stateStore = new StateStore(join(app.getPath("userData"), "stella-state.json"));
+    skinArtworkService = new SkinArtworkService({
+      directory: join(app.getPath("userData"), "skin-artwork"),
+      storage: Object.freeze({
+        mkdir: async (path: string) => { await mkdir(path, { recursive: true }); },
+        readFile,
+        copyFile,
+        readdir: async (path: string) => readdir(path),
+        stat,
+        remove: async (path: string) => { await rm(path, { force: true }); },
+      }),
+    });
+    registerSkinArtworkProtocol();
     registerIpcHandlers();
     createWindow();
     void initializeTaskCapability();

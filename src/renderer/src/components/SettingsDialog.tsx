@@ -1,13 +1,18 @@
-import { Check, ExternalLink, Keyboard, Monitor, Moon, ShieldCheck, ShieldOff, Sun } from "lucide-react";
+import { Check, ExternalLink, ImagePlus, Keyboard, Monitor, Moon, RotateCcw, ShieldCheck, ShieldOff, Sun } from "lucide-react";
 import type { RuntimeBootstrap } from "@shared/contracts";
+import type { SkinArtworkBySkin, SkinId } from "@shared/skin-artwork";
 import type { Preferences, ThemePreference } from "../hooks/use-preferences";
-import { SKIN_OPTIONS } from "../lib/skins";
+import { SKIN_OPTIONS, skinDefinition } from "../lib/skins";
 import { Modal } from "./Modal";
 
 interface SettingsDialogProps {
   readonly bootstrap: RuntimeBootstrap;
   readonly preferences: Preferences;
+  readonly customArtwork: SkinArtworkBySkin;
+  readonly artworkBusySkin: SkinId | null;
   readonly onPreferencesChange: (preferences: Preferences) => void;
+  readonly onChooseSkinArtwork: (skin: SkinId) => void;
+  readonly onResetSkinArtwork: (skin: SkinId) => void;
   readonly onAutoCompactionChange: (enabled: boolean) => void;
   readonly onSteeringModeChange: (mode: "all" | "one-at-a-time") => void;
   readonly onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
@@ -29,7 +34,11 @@ function Toggle({ checked, onChange, label }: { readonly checked: boolean; reado
 export function SettingsDialog({
   bootstrap,
   preferences,
+  customArtwork,
+  artworkBusySkin,
   onPreferencesChange,
+  onChooseSkinArtwork,
+  onResetSkinArtwork,
   onAutoCompactionChange,
   onSteeringModeChange,
   onFollowUpModeChange,
@@ -37,6 +46,9 @@ export function SettingsDialog({
   onOpenLink,
   onClose,
 }: SettingsDialogProps) {
+  const selectedSkin = skinDefinition(preferences.skin);
+  const selectedArtwork = customArtwork[preferences.skin];
+  const artworkBusy = artworkBusySkin === preferences.skin;
   return (
     <Modal title="偏好设置" eyebrow="STELLA SETTINGS" onClose={onClose} className="settings-dialog">
       <div className="settings-scroll">
@@ -54,7 +66,10 @@ export function SettingsDialog({
                   key={skin.value}
                   onClick={() => onPreferencesChange(Object.freeze({ ...preferences, skin: skin.value }))}
                 >
-                  <span className="skin-option__preview" aria-hidden="true"><i /><b /></span>
+                  <span className="skin-option__preview" aria-hidden="true">
+                    {customArtwork[skin.value] && <img src={customArtwork[skin.value]?.url} alt="" />}
+                    <i /><b />
+                  </span>
                   <span className="skin-option__copy">
                     <span><strong>{skin.label}</strong><em>{skin.subtitle}</em></span>
                     <small>{skin.description}</small>
@@ -64,6 +79,27 @@ export function SettingsDialog({
                 </button>
               );
             })}
+          </div>
+          <div className="skin-artwork-control">
+            <span className={`skin-artwork-control__preview skin-option--${selectedSkin.value}`} aria-hidden="true">
+              <span className="skin-option__preview">
+                {selectedArtwork && <img src={selectedArtwork.url} alt="" />}
+                <i /><b />
+              </span>
+            </span>
+            <span className="skin-artwork-control__copy">
+              <strong>{selectedSkin.label} · {selectedArtwork ? "自定义背景" : "内置背景"}</strong>
+              <small>{selectedArtwork ? "图片已复制到应用用户数据目录，原文件移动后仍然有效。" : "使用随安装包提供的原创主题画面。"}</small>
+              <i>PNG / JPEG / WebP · 最大 25 MB</i>
+            </span>
+            <span className="skin-artwork-control__actions">
+              <button type="button" disabled={artworkBusy} onClick={() => onChooseSkinArtwork(preferences.skin)}>
+                <ImagePlus size={14} />{artworkBusy ? "正在处理" : selectedArtwork ? "更换图片" : "选择图片"}
+              </button>
+              <button type="button" disabled={artworkBusy || !selectedArtwork} onClick={() => onResetSkinArtwork(preferences.skin)}>
+                <RotateCcw size={13} />恢复内置
+              </button>
+            </span>
           </div>
         </section>
 

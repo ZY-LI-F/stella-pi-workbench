@@ -229,6 +229,361 @@
   --shadow-soft: 0 10px 26px rgba(60, 50, 23, 0.11);
 }
 
+/* 旭日：深海蓝托住朱砂日轮，暖金只用于方向与确认。 */
+:root[data-skin="xuri"] {
+  --night-950: #08121b;
+  --night-900: #0d1822;
+  --night-850: #132330;
+  --night-800: #1a2c39;
+  --night-750: #243846;
+  --moon-50: #fff8ec;
+  --moon-100: #f5ead7;
+  --moon-300: #d8c9b5;
+  --moon-500: #9b8e82;
+  --iris-300: #ff9a69;
+  --iris-400: #ed6548;
+  --iris-500: #c94a34;
+  --apricot-300: #efc776;
+  --apricot-400: #d7a64f;
+  --aqua-300: #71b7b0;
+  --rose-400: #e66b66;
+  --success: #78c5a7;
+  --warning: #e5b45b;
+  --danger: #f06d69;
+  --app-bg: #0c1721;
+  --panel: rgba(12, 24, 34, 0.86);
+  --panel-solid: #12232f;
+  --panel-elevated: rgba(24, 42, 53, 0.97);
+  --surface: rgba(255, 239, 213, 0.052);
+  --surface-hover: rgba(255, 239, 213, 0.09);
+  --surface-active: rgba(237, 101, 72, 0.15);
+  --border: rgba(226, 176, 90, 0.12);
+  --border-strong: rgba(226, 176, 90, 0.24);
+  --text: #f8eee0;
+  --text-soft: #d8cabb;
+  --text-muted: #9d958e;
+  --text-faint: #6e7377;
+  --accent: #ed6548;
+  --accent-strong: #ff9a69;
+  --accent-warm: #d7a64f;
+  --accent-soft: rgba(237, 101, 72, 0.13);
+  --shadow: 0 26px 72px rgba(0, 8, 14, 0.46);
+  --shadow-soft: 0 12px 32px rgba(0, 8, 14, 0.28);
+  --blur: blur(20px) saturate(108%);
+  --radius-xs: 5px;
+  --radius-sm: 9px;
+  --radius-md: 14px;
+  --radius-lg: 19px;
+  --radius-xl: 25px;
+}
+
+:root[data-skin="xuri"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #eee5d6;
+  --panel: rgba(255, 248, 235, 0.84);
+  --panel-solid: #fff8eb;
+  --panel-elevated: rgba(255, 251, 242, 0.97);
+  --surface: rgba(25, 43, 54, 0.05);
+  --surface-hover: rgba(25, 43, 54, 0.085);
+  --surface-active: rgba(199, 67, 43, 0.12);
+  --border: rgba(91, 64, 41, 0.12);
+  --border-strong: rgba(176, 111, 43, 0.25);
+  --text: #24313a;
+  --text-soft: #52616a;
+  --text-muted: #77756f;
+  --text-faint: #a0988e;
+  --accent: #c7432b;
+  --accent-strong: #a93222;
+  --accent-warm: #a87524;
+  --accent-soft: rgba(199, 67, 43, 0.11);
+  --shadow: 0 24px 70px rgba(91, 64, 41, 0.17);
+  --shadow-soft: 0 12px 30px rgba(91, 64, 41, 0.1);
+}
+
+/* 月华：月白、冰蓝与淡紫构成低饱和的夜湖玻璃。 */
+:root[data-skin="yuehua"] {
+  --night-950: #040b18;
+  --night-900: #071125;
+  --night-850: #0c1931;
+  --night-800: #12223d;
+  --night-750: #1b2c49;
+  --moon-50: #f8f9ff;
+  --moon-100: #e8edff;
+  --moon-300: #bdc8ea;
+  --moon-500: #7d89aa;
+  --iris-300: #d8ddff;
+  --iris-400: #9dacfb;
+  --iris-500: #7184d5;
+  --apricot-300: #d9bfff;
+  --apricot-400: #b89bea;
+  --aqua-300: #80d7eb;
+  --rose-400: #c59bd8;
+  --success: #79d0c0;
+  --warning: #d5bd82;
+  --danger: #ee8ca8;
+  --app-bg: #071125;
+  --panel: rgba(8, 19, 41, 0.82);
+  --panel-solid: #0c1931;
+  --panel-elevated: rgba(18, 34, 61, 0.96);
+  --surface: rgba(224, 232, 255, 0.05);
+  --surface-hover: rgba(224, 232, 255, 0.085);
+  --surface-active: rgba(157, 172, 251, 0.14);
+  --border: rgba(196, 207, 245, 0.11);
+  --border-strong: rgba(196, 207, 245, 0.2);
+  --text: #eef2ff;
+  --text-soft: #c7d0eb;
+  --text-muted: #8996b7;
+  --text-faint: #5d6b8d;
+  --accent: #9dacfb;
+  --accent-strong: #d8ddff;
+  --accent-warm: #b89bea;
+  --accent-soft: rgba(157, 172, 251, 0.13);
+  --shadow: 0 28px 84px rgba(0, 5, 19, 0.48);
+  --shadow-soft: 0 14px 38px rgba(0, 5, 19, 0.28);
+  --blur: blur(30px) saturate(118%);
+  --radius-xs: 8px;
+  --radius-sm: 13px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-xl: 31px;
+}
+
+:root[data-skin="yuehua"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #e8edf8;
+  --panel: rgba(247, 249, 255, 0.8);
+  --panel-solid: #f7f9ff;
+  --panel-elevated: rgba(252, 253, 255, 0.97);
+  --surface: rgba(40, 59, 104, 0.05);
+  --surface-hover: rgba(40, 59, 104, 0.085);
+  --surface-active: rgba(86, 108, 173, 0.12);
+  --border: rgba(48, 67, 112, 0.1);
+  --border-strong: rgba(86, 108, 173, 0.21);
+  --text: #273451;
+  --text-soft: #52617e;
+  --text-muted: #74809b;
+  --text-faint: #9ca5b9;
+  --accent: #566cac;
+  --accent-strong: #3e538f;
+  --accent-warm: #826db0;
+  --accent-soft: rgba(86, 108, 173, 0.11);
+  --shadow: 0 28px 78px rgba(47, 63, 101, 0.16);
+  --shadow-soft: 0 13px 32px rgba(47, 63, 101, 0.1);
+}
+
+/* 黑执事：黑曜石面板、深红契约与古银边线。 */
+:root[data-skin="kuroshitsuji"] {
+  --night-950: #050609;
+  --night-900: #08090d;
+  --night-850: #0e1016;
+  --night-800: #15171e;
+  --night-750: #202129;
+  --moon-50: #f7f4ef;
+  --moon-100: #e6e0da;
+  --moon-300: #b7b0ab;
+  --moon-500: #777277;
+  --iris-300: #df536b;
+  --iris-400: #b92543;
+  --iris-500: #81172d;
+  --apricot-300: #d2b27b;
+  --apricot-400: #a88450;
+  --aqua-300: #8ba6aa;
+  --rose-400: #c32648;
+  --success: #75a690;
+  --warning: #c39c5b;
+  --danger: #e05265;
+  --app-bg: #08090d;
+  --panel: rgba(10, 11, 16, 0.91);
+  --panel-solid: #0e1016;
+  --panel-elevated: rgba(22, 23, 30, 0.98);
+  --surface: rgba(236, 229, 219, 0.042);
+  --surface-hover: rgba(236, 229, 219, 0.075);
+  --surface-active: rgba(185, 37, 67, 0.16);
+  --border: rgba(187, 167, 142, 0.12);
+  --border-strong: rgba(187, 167, 142, 0.24);
+  --text: #eeeae5;
+  --text-soft: #c5beb8;
+  --text-muted: #8b8584;
+  --text-faint: #5e5c62;
+  --accent: #b92543;
+  --accent-strong: #df536b;
+  --accent-warm: #a88450;
+  --accent-soft: rgba(185, 37, 67, 0.14);
+  --shadow: 0 28px 80px rgba(0, 0, 0, 0.58);
+  --shadow-soft: 0 13px 34px rgba(0, 0, 0, 0.38);
+  --blur: blur(16px) saturate(92%);
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+}
+
+:root[data-skin="kuroshitsuji"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #e6e1db;
+  --panel: rgba(246, 242, 237, 0.88);
+  --panel-solid: #f4f0eb;
+  --panel-elevated: rgba(250, 247, 242, 0.98);
+  --surface: rgba(39, 32, 32, 0.045);
+  --surface-hover: rgba(39, 32, 32, 0.08);
+  --surface-active: rgba(133, 24, 45, 0.12);
+  --border: rgba(59, 45, 43, 0.13);
+  --border-strong: rgba(105, 72, 61, 0.25);
+  --text: #2b292b;
+  --text-soft: #5a5454;
+  --text-muted: #7a7270;
+  --text-faint: #a09894;
+  --accent: #8f1d35;
+  --accent-strong: #6f1329;
+  --accent-warm: #816239;
+  --accent-soft: rgba(143, 29, 53, 0.1);
+  --shadow: 0 24px 70px rgba(57, 43, 40, 0.19);
+  --shadow-soft: 0 12px 30px rgba(57, 43, 40, 0.12);
+}
+
+/* JOJO：粉紫郊町与黄金意式装饰，共用高对比漫画色阶。 */
+:root[data-skin="jojo"] {
+  --night-950: #10051e;
+  --night-900: #180a2a;
+  --night-850: #22103a;
+  --night-800: #30154a;
+  --night-750: #42205d;
+  --moon-50: #fff9e7;
+  --moon-100: #f6e9cc;
+  --moon-300: #d5c5e3;
+  --moon-500: #9a83af;
+  --iris-300: #ffe66e;
+  --iris-400: #f1c83c;
+  --iris-500: #c79a1d;
+  --apricot-300: #ff7bd5;
+  --apricot-400: #eb3db2;
+  --aqua-300: #49d6c7;
+  --rose-400: #f350a8;
+  --success: #53cf9f;
+  --warning: #f1c83c;
+  --danger: #ff5b80;
+  --app-bg: #180a2a;
+  --panel: rgba(25, 10, 45, 0.86);
+  --panel-solid: #22103a;
+  --panel-elevated: rgba(48, 21, 74, 0.97);
+  --surface: rgba(255, 249, 231, 0.055);
+  --surface-hover: rgba(255, 249, 231, 0.1);
+  --surface-active: rgba(241, 200, 60, 0.16);
+  --border: rgba(241, 200, 60, 0.14);
+  --border-strong: rgba(241, 200, 60, 0.3);
+  --text: #fff7e5;
+  --text-soft: #e2d2e5;
+  --text-muted: #a98fb9;
+  --text-faint: #745e86;
+  --accent: #f1c83c;
+  --accent-strong: #ffe66e;
+  --accent-warm: #eb3db2;
+  --accent-soft: rgba(241, 200, 60, 0.13);
+  --shadow: 10px 18px 0 rgba(6, 2, 13, 0.2), 0 26px 70px rgba(6, 2, 13, 0.42);
+  --shadow-soft: 5px 8px 0 rgba(6, 2, 13, 0.16);
+  --blur: blur(18px) saturate(132%);
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 9px;
+  --radius-lg: 13px;
+  --radius-xl: 18px;
+}
+
+:root[data-skin="jojo"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #f0dfed;
+  --panel: rgba(255, 246, 252, 0.84);
+  --panel-solid: #fff5fb;
+  --panel-elevated: rgba(255, 250, 253, 0.98);
+  --surface: rgba(62, 25, 83, 0.055);
+  --surface-hover: rgba(62, 25, 83, 0.095);
+  --surface-active: rgba(176, 126, 0, 0.13);
+  --border: rgba(85, 34, 105, 0.12);
+  --border-strong: rgba(168, 113, 0, 0.27);
+  --text: #3a2048;
+  --text-soft: #664f70;
+  --text-muted: #806b8b;
+  --text-faint: #a793ad;
+  --accent: #a87500;
+  --accent-strong: #7d5600;
+  --accent-warm: #c12b91;
+  --accent-soft: rgba(168, 117, 0, 0.11);
+  --shadow: 8px 13px 0 rgba(73, 29, 83, 0.08), 0 22px 58px rgba(73, 29, 83, 0.14);
+  --shadow-soft: 4px 7px 0 rgba(73, 29, 83, 0.07);
+}
+
+/* 棋魂：墨蓝棋室、旧金棋枰与黑白秩序。 */
+:root[data-skin="qihun"] {
+  --night-950: #071017;
+  --night-900: #0b1720;
+  --night-850: #11232c;
+  --night-800: #192e37;
+  --night-750: #243a42;
+  --moon-50: #f7f2e7;
+  --moon-100: #e8dfcf;
+  --moon-300: #c3b69e;
+  --moon-500: #817d73;
+  --iris-300: #e2c980;
+  --iris-400: #c5a454;
+  --iris-500: #957936;
+  --apricot-300: #d3ae72;
+  --apricot-400: #b8894c;
+  --aqua-300: #7daab0;
+  --rose-400: #bd7770;
+  --success: #7fb294;
+  --warning: #d0ad5a;
+  --danger: #d87872;
+  --app-bg: #0b1720;
+  --panel: rgba(11, 25, 33, 0.87);
+  --panel-solid: #11232c;
+  --panel-elevated: rgba(25, 46, 55, 0.97);
+  --surface: rgba(239, 229, 208, 0.048);
+  --surface-hover: rgba(239, 229, 208, 0.085);
+  --surface-active: rgba(197, 164, 84, 0.14);
+  --border: rgba(197, 164, 84, 0.13);
+  --border-strong: rgba(197, 164, 84, 0.25);
+  --text: #eee8dc;
+  --text-soft: #ccc3b3;
+  --text-muted: #918f86;
+  --text-faint: #667078;
+  --accent: #c5a454;
+  --accent-strong: #e2c980;
+  --accent-warm: #b8894c;
+  --accent-soft: rgba(197, 164, 84, 0.12);
+  --shadow: 0 26px 72px rgba(1, 7, 10, 0.48);
+  --shadow-soft: 0 12px 32px rgba(1, 7, 10, 0.3);
+  --blur: blur(18px) saturate(94%);
+  --radius-xs: 4px;
+  --radius-sm: 7px;
+  --radius-md: 11px;
+  --radius-lg: 15px;
+  --radius-xl: 20px;
+}
+
+:root[data-skin="qihun"][data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #e7e0d2;
+  --panel: rgba(247, 242, 231, 0.86);
+  --panel-solid: #f6f0e4;
+  --panel-elevated: rgba(251, 247, 238, 0.98);
+  --surface: rgba(30, 46, 49, 0.048);
+  --surface-hover: rgba(30, 46, 49, 0.085);
+  --surface-active: rgba(142, 112, 45, 0.12);
+  --border: rgba(60, 61, 51, 0.12);
+  --border-strong: rgba(142, 112, 45, 0.25);
+  --text: #263238;
+  --text-soft: #536061;
+  --text-muted: #777a75;
+  --text-faint: #9c9b92;
+  --accent: #8e702d;
+  --accent-strong: #6c5420;
+  --accent-warm: #8d6035;
+  --accent-soft: rgba(142, 112, 45, 0.1);
+  --shadow: 0 25px 68px rgba(58, 50, 34, 0.17);
+  --shadow-soft: 0 12px 30px rgba(58, 50, 34, 0.1);
+}
+
 :root[data-density="compact"] {
   --composer-gap: 12px;
   --message-gap: 20px;

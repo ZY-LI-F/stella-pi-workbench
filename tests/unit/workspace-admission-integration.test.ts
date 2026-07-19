@@ -82,8 +82,23 @@ describe("shared WorkspaceAdmission integration", () => {
     const agentFactory = new SharedRuntimeFactory();
     const boardService = new BoardService({ repository, catalog: CATALOG, emitChanged: () => undefined, id, now });
     const agentTaskService = new AgentTaskService({ repository, catalog: CATALOG, emitChanged: () => undefined, id, now });
-    const workflow = new WorkflowOrchestrator({ repository, catalog: CATALOG, runtimeFactory: workflowFactory, admission, emitBoardEvent: () => undefined, id, now });
-    const runner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory: agentFactory, admission, emitBoardEvent: () => undefined });
+    const workflow = new WorkflowOrchestrator({
+      repository,
+      catalog: CATALOG,
+      runtimeFactory: workflowFactory,
+      admission,
+      emitBoardEvent: () => undefined,
+      globalModel: () => undefined,
+      id,
+      now,
+    });
+    const runner = new AgentTaskRunner({
+      service: agentTaskService,
+      runtimeFactory: agentFactory,
+      admission,
+      emitBoardEvent: () => undefined,
+      globalModel: () => undefined,
+    });
 
     await boardService.createTask({
       title: "Workflow writer", description: "", acceptanceCriteria: "", priority: "high",

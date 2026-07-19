@@ -66,7 +66,10 @@ function idFactory(): () => string {
   return () => `id-${String(++value).padStart(3, "0")}`;
 }
 
-async function setup(runtimeFactory = new FakeAgentRuntimeFactory()) {
+async function setup(
+  runtimeFactory = new FakeAgentRuntimeFactory(),
+  globalModel: () => Readonly<{ readonly provider: string; readonly model: string }> | undefined = () => undefined,
+) {
   const repository = new MemoryRepository();
   const id = idFactory();
   const now = () => "2026-07-18T00:00:00.000Z";
@@ -75,7 +78,13 @@ async function setup(runtimeFactory = new FakeAgentRuntimeFactory()) {
   const squadService = new SquadService({ repository, catalog: BUILTIN_ORCHESTRATION_CATALOG, emitChanged: () => undefined, id, now });
   const events: unknown[] = [];
   const admission = new WorkspaceAdmission({ canonicalize: async (path) => path.toLocaleLowerCase("en-US") });
-  const runner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory, emitBoardEvent: (event) => events.push(event), admission });
+  const runner = new AgentTaskRunner({
+    service: agentTaskService,
+    runtimeFactory,
+    emitBoardEvent: (event) => events.push(event),
+    admission,
+    globalModel,
+  });
 
   const createTask = async (title: string, executionTarget: ExecutionTarget = { kind: "agent", agentId: "builder" }) => {
     await boardService.createTask({
@@ -92,6 +101,23 @@ async function setup(runtimeFactory = new FakeAgentRuntimeFactory()) {
 }
 
 describe("AgentTaskRunner", () => {
+  it("inherits the application model when the Agent has no model override", async () => {
+    const runtimeFactory = new FakeAgentRuntimeFactory();
+    const { agentTaskService, runner, createTask } = await setup(
+      runtimeFactory,
+      () => Object.freeze({ provider: "openai", model: "gpt-global" }),
+    );
+    const taskId = await createTask("继承全局模型");
+    await agentTaskService.dispatchDirect(taskId);
+
+    runner.start();
+
+    await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.start).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "openai",
+      model: "gpt-global",
+    })));
+  });
+
   it("runs direct AgentTasks serially and persists output, stats, comments, and review state", async () => {
     const { repository, agentTaskService, runtimeFactory, runner, createTask } = await setup();
     const firstTaskId = await createTask("第一个任务");
@@ -416,7 +442,13 @@ describe("AgentTaskRunner", () => {
         : task),
     }));
 
-    const recoveredRunner = new AgentTaskRunner({ service: agentTaskService, runtimeFactory: new FakeAgentRuntimeFactory(), emitBoardEvent: () => undefined, admission });
+    const recoveredRunner = new AgentTaskRunner({
+      service: agentTaskService,
+      runtimeFactory: new FakeAgentRuntimeFactory(),
+      emitBoardEvent: () => undefined,
+      admission,
+      globalModel: () => undefined,
+    });
     recoveredRunner.start();
     await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "squad-leader")?.status).toBe("failed"));
     expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");

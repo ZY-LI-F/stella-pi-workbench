@@ -57,7 +57,10 @@ function idFactory(): () => string {
   return () => `id-${++value}`;
 }
 
-async function setup(runtimeFactory = new FakeRuntimeFactory()) {
+async function setup(
+  runtimeFactory = new FakeRuntimeFactory(),
+  globalModel: () => Readonly<{ readonly provider: string; readonly model: string }> | undefined = () => undefined,
+) {
   const repository = new MemoryRepository();
   const events: BoardBridgeEvent[] = [];
   const admission = new WorkspaceAdmission({ canonicalize: async (path) => path.toLocaleLowerCase("en-US") });
@@ -76,6 +79,7 @@ async function setup(runtimeFactory = new FakeRuntimeFactory()) {
     runtimeFactory,
     emitBoardEvent: (event) => events.push(event),
     admission,
+    globalModel,
     id,
     now: () => "2026-07-17T00:00:00.000Z",
   });
@@ -83,6 +87,21 @@ async function setup(runtimeFactory = new FakeRuntimeFactory()) {
 }
 
 describe("WorkflowOrchestrator", () => {
+  it("inherits the application model for workflow Agents without overrides", async () => {
+    const runtimeFactory = new FakeRuntimeFactory();
+    const { orchestrator, taskId } = await setup(
+      runtimeFactory,
+      () => Object.freeze({ provider: "openai", model: "gpt-global" }),
+    );
+
+    await orchestrator.dispatch(taskId);
+
+    await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.start).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "openai",
+      model: "gpt-global",
+    })));
+  });
+
   it("runs isolated Agents in order and pauses at the plan gate", async () => {
     const { repository, runtimeFactory, orchestrator, taskId } = await setup();
     await orchestrator.dispatch(taskId);

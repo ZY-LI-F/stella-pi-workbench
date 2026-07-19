@@ -37,6 +37,9 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await expect(window.getByLabel(/Stella Pi Workbench/).first()).toBeVisible();
     await expect(window.getByRole("button", { name: "新建看板任务" })).toBeVisible();
     await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
+    const globalModel = window.getByRole("combobox", { name: "全局模型" });
+    await expect(globalModel).toBeVisible();
+    await expect(window.getByLabel("全局运行模型")).toContainText("当前模型");
     await expect(window.getByText("Stella", { exact: true }).first()).toBeVisible();
     await expect(window.getByLabel("最小化")).toBeVisible();
     await window.bringToFront();
@@ -68,8 +71,10 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await window.screenshot({ path: "docs/task-room-stella.png", fullPage: true, animations: "disabled" });
     await taskRoom.getByRole("button", { name: "关闭任务详情" }).click();
 
+    const selectedGlobalModel = await globalModel.inputValue();
     await window.getByRole("button", { name: "团队协作", exact: true }).click();
     await expect(window.getByRole("heading", { name: "团队协作" })).toBeVisible();
+    await expect(globalModel).toHaveValue(selectedGlobalModel);
     await expect(window.getByRole("heading", { name: "项目启动室", exact: true })).toBeVisible();
     const launchComposer = window.getByPlaceholder("@LEAD 说明目标、边界和希望得到的结果…");
     await window.getByRole("button", { name: "在项目启动室 @通用调度负责人" }).click();
@@ -98,6 +103,7 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await window.screenshot({ path: "docs/team-chat-stella.png", fullPage: true, animations: "disabled" });
     await window.getByRole("button", { name: "任务看板", exact: true }).click();
     await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
+    await expect(globalModel).toHaveValue(selectedGlobalModel);
 
     await taskCard.dragTo(window.locator(".kanban-lane--blocked"));
     await expect(window.locator(".kanban-lane--blocked").getByText("验证固定 Agent 看板", { exact: true })).toBeVisible();
@@ -196,7 +202,7 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
 
     await window.getByRole("button", { name: "当前会话" }).click();
     await expect(window.getByLabel("给 Pi 的消息")).toBeVisible();
-    await expect(window.getByLabel("模型")).toBeVisible();
+    await expect(globalModel).toHaveValue(selectedGlobalModel);
     await expect(window.getByLabel("思考级别")).toBeVisible();
     await window.getByRole("button", { name: "固化为任务" }).click();
     const piTaskDraft = window.getByRole("dialog", { name: "创建看板任务" });
