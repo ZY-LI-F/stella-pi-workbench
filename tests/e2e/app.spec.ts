@@ -1,9 +1,24 @@
 import { expect, test, _electron as electron } from "@playwright/test";
+import { createServer } from "node:net";
+
+async function availableLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("无法为 Electron E2E 分配本机 Webhook 端口");
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return address.port;
+}
 
 test("launches the real Pi RPC workbench and exposes core controls", async ({}, testInfo) => {
+  const webhookPort = await availableLoopbackPort();
   const electronApp = await electron.launch({
     args: [".", `--user-data-dir=${testInfo.outputPath("electron-user-data")}`],
     cwd: process.cwd(),
+    env: Object.freeze({ ...process.env, STELLA_WEBHOOK_PORT: String(webhookPort) }),
   });
   try {
     const window = await electronApp.firstWindow();
@@ -41,7 +56,13 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     const taskRoom = window.getByLabel("任务详情：验证固定 Agent 看板");
     await expect(taskRoom.getByText("任务事实流", { exact: true })).toBeVisible();
     await expect(taskRoom.getByText("尚无持久化 Run", { exact: true })).toBeVisible();
-    const roomComposer = taskRoom.getByPlaceholder("补充上下文；用 @lead 调度团队，或 @builder 直接委派…");
+    const roomComposer = taskRoom.getByPlaceholder("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…");
+    await roomComposer.fill("@策略");
+    const mentionPicker = taskRoom.getByRole("listbox", { name: "选择要 @ 的 Agent" });
+    await expect(mentionPicker.getByRole("option", { name: /靶点策略负责人/ })).toBeVisible();
+    await window.screenshot({ path: "docs/agent-mention-picker-stella.png", fullPage: true, animations: "disabled" });
+    await mentionPicker.getByRole("option", { name: /靶点策略负责人/ }).click();
+    await expect(roomComposer).toHaveValue("@STRATEGY ");
     await roomComposer.fill("@builder 实现后交给 @VERIFY 验证");
     await expect(taskRoom.getByText(/提交后将创建 2 个 AgentTask/)).toBeVisible();
     await window.screenshot({ path: "docs/task-room-stella.png", fullPage: true, animations: "disabled" });
@@ -51,9 +72,9 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await expect(window.getByRole("heading", { name: "团队协作" })).toBeVisible();
     await expect(window.getByRole("button", { name: /验证固定 Agent 看板/ })).toBeVisible();
     const teamRoom = window.getByLabel("任务详情：验证固定 Agent 看板");
-    const teamComposer = teamRoom.getByPlaceholder("补充上下文；用 @lead 调度团队，或 @builder 直接委派…");
+    const teamComposer = teamRoom.getByPlaceholder("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…");
     await teamComposer.fill("@lead 请拆解任务、委派合适 Worker 并验收结果");
-    await expect(teamRoom.getByText(/通用调度负责人 \(@lead\)/)).toBeVisible();
+    await expect(teamRoom.getByText(/通用调度负责人 \(@LEAD\)/)).toBeVisible();
     await window.getByRole("button", { name: "创建 Agent", exact: true }).click();
     const agentDraft = window.getByRole("dialog", { name: "创建项目 Agent" });
     await agentDraft.getByLabel(/名称/).fill("数据分析师");
@@ -62,6 +83,9 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await agentDraft.getByLabel(/固定指令/).fill("只读分析；明确输入、计算过程、结论和未验证项。");
     await agentDraft.getByRole("button", { name: "创建 Agent", exact: true }).click();
     await expect(window.locator(".agent-presence", { hasText: "数据分析师" })).toBeVisible();
+    await teamComposer.fill("");
+    await window.getByRole("button", { name: "在 Task Room @数据分析师" }).click();
+    await expect(teamComposer).toHaveValue("@DATA ");
     await window.screenshot({ path: "docs/team-chat-stella.png", fullPage: true, animations: "disabled" });
     await window.getByRole("button", { name: "任务看板", exact: true }).click();
     await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
@@ -103,7 +127,7 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await automationStudio.getByRole("button", { name: "创建规则" }).click();
     await automationStudio.getByRole("button", { name: /本机构建回调/ }).click();
     await expect(automationStudio.getByText("LISTENING")).toBeVisible();
-    await expect(automationStudio.getByText(/127\.0\.0\.1:43127\/api\/webhooks\//)).toBeVisible();
+    await expect(automationStudio.getByText(new RegExp(`127\\.0\\.0\\.1:${webhookPort}\\/api\\/webhooks\\/`))).toBeVisible();
     await automationStudio.locator(".autopilot-editor__scroll").evaluate((element) => { element.scrollTop = 0; });
     await window.screenshot({ path: "docs/automation-stella.png", fullPage: true, animations: "disabled" });
     await window.keyboard.press("Escape");

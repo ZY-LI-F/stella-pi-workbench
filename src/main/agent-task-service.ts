@@ -124,6 +124,9 @@ export class AgentTaskService {
       if (!rootAgent) throw new Error("mention 解析结果缺少根 Agent");
       const leadMention = mentions.find((agent) => agent.id === "lead");
       if (leadMention && rootAgent.id !== "lead") throw new Error("@lead 必须是消息中的第一个 Agent mention，由 LEAD 决定后续委派");
+      if (leadMention && mentions.length > 1) {
+        throw new Error("@lead 协调模式不能与直接 Worker mention 混用；请让 LEAD 通过结构化计划委派");
+      }
       const rootId = this.#id();
       const squadId = task.executionTarget.kind === "squad" ? task.executionTarget.squadId : undefined;
       const root: AgentTask = Object.freeze({

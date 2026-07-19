@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { Bot, CircleDot, Hash, Menu, MessageSquarePlus, Orbit, Plus, Search, Sparkles, UsersRound } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Bot, CircleDot, Hash, Menu, MessageSquarePlus, Orbit, Pencil, Plus, Search, Sparkles, UsersRound } from "lucide-react";
 import type { ProjectMeta, StellaDesktopApi } from "@shared/contracts";
-import { deriveAgentPresences, type AgentPresenceState } from "@shared/agent-presence";
+import { deriveAgentPresences } from "@shared/agent-presence";
+import { availableMentionAgentsForTask } from "@shared/agent-mentions";
 import type { ProjectAgentDefinition } from "@shared/kanban";
 import type { KanbanController } from "../../hooks/use-kanban";
-import { STAGE_LABEL, formatRelativeTime } from "../kanban/kanban-format";
+import { AGENT_PRESENCE_LABEL, STAGE_LABEL, formatRelativeTime } from "../kanban/kanban-format";
 import { TaskDetailPanel } from "../kanban/TaskDetailPanel";
+import type { AgentMentionRequest } from "../kanban/AgentMentionInput";
 import { TaskEditorDialog } from "../kanban/TaskEditorDialog";
 import { AgentDraftDialog } from "./AgentDraftDialog";
 
@@ -20,14 +22,6 @@ interface TeamWorkspaceProps {
   readonly onError: (message: string) => void;
 }
 
-const PRESENCE_LABEL: Readonly<Record<AgentPresenceState, string>> = Object.freeze({
-  available: "可用",
-  queued: "排队",
-  running: "执行中",
-  waiting: "等待",
-  attention: "需处理",
-});
-
 export function TeamWorkspace({ api, controller, project, executionEnabled, onOpenSidebar, onNewTask, onContinueTaskSession, onError }: TeamWorkspaceProps) {
   const { state } = controller;
   const [query, setQuery] = useState("");
@@ -35,6 +29,8 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
   const [agentDraft, setAgentDraft] = useState<ProjectAgentDefinition | "new">();
   const [editingTask, setEditingTask] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [mentionRequest, setMentionRequest] = useState<AgentMentionRequest>();
+  const mentionRequestSequence = useRef(0);
   const bootstrap = state.bootstrap;
   const board = bootstrap?.board;
   const catalog = bootstrap?.catalog;
@@ -53,6 +49,8 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
     setSelectedTaskId(tasks[0]?.id);
   }, [selectedTaskId, tasks]);
 
+  useEffect(() => setMentionRequest(undefined), [selectedTaskId]);
+
   if (!bootstrap || !board || !catalog) {
     return <main className="team-workspace team-workspace--loading"><div className="kanban-loading-orbit"><span /><span /><span /></div><h1>正在连接团队中继</h1><p>{state.error ?? "读取 Task Room 与 Agent Presence。"}</p></main>;
   }
@@ -63,8 +61,13 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
   const taskAgentTasks = selectedTask ? board.agentTasks.filter((agentTask) => agentTask.taskId === selectedTask.id) : [];
   const taskComments = selectedTask ? board.comments.filter((comment) => comment.taskId === selectedTask.id) : [];
   const presences = deriveAgentPresences(board, catalog, project?.cwd);
-  const customAgents = board.customAgents.filter((agent) => !project || agent.projectPath === project.cwd);
+  const mentionableAgentIds = new Set(selectedTask ? availableMentionAgentsForTask(selectedTask, catalog, board.squads).map((agent) => agent.id) : []);
   const busy = selectedTask ? state.pending.includes(selectedTask.id) : false;
+  const selectedTaskMentionBlock = selectedTask?.activeRunId || selectedTask?.activeAgentTaskId
+    ? "当前任务正在执行"
+    : selectedTask?.stage === "completed"
+      ? "已完成任务需先移回待规划"
+      : undefined;
 
   const perform = async (action: () => Promise<unknown>) => {
     setLocalError("");
@@ -120,6 +123,8 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
             onReviewExecution={(input) => perform(() => controller.reviewExecution(input)).then(() => undefined)}
             onRevealPath={(path) => void api.revealPath(path)}
             onContinueInPi={(sessionPath) => onContinueTaskSession(selectedTask.id, sessionPath)}
+            agentPresences={presences}
+            mentionRequest={mentionRequest}
           /> : <div className="team-conversation__empty"><Orbit size={34} /><small>TEAM RELAY</small><h2>选择一个任务频道</h2><p>在这里与 @lead 或指定 Worker 对话，所有分发、报告和验收仍写入同一条 Task Room 事实流。</p></div>}
           {localError && <p className="team-workspace__error" role="alert">{localError}</p>}
         </section>
@@ -130,7 +135,20 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
           <div className="team-pulse__list">
             {presences.map((presence, index) => {
               const scoped = presence.agent as Partial<ProjectAgentDefinition>;
-              return <button type="button" key={presence.agent.id} className={`agent-presence agent-presence--${presence.state}`} style={{ "--orbit-index": index } as CSSProperties} onClick={() => scoped.projectPath && setAgentDraft(scoped as ProjectAgentDefinition)}><span className="agent-presence__avatar"><Bot size={14} /><i /></span><span><strong>{presence.agent.name}</strong><small>@{presence.agent.id} · {presence.detail}</small>{presence.activeTaskTitle && <em>{presence.activeTaskTitle}</em>}</span><span className="agent-presence__state"><b>{PRESENCE_LABEL[presence.state]}</b><small>{presence.workload > 0 ? `${presence.workload} 个任务` : presence.agent.callsign}</small></span></button>;
+              const membershipBlock = selectedTask && !mentionableAgentIds.has(presence.agent.id) ? "不属于当前 Task Room 的可 @ 范围" : undefined;
+              const mentionBlock = !selectedTask ? "请先选择任务频道" : selectedTaskMentionBlock ?? membershipBlock;
+              return <article key={presence.agent.id} className={`agent-presence agent-presence--${presence.state}`} style={{ "--orbit-index": index } as CSSProperties}>
+                <button type="button" className="agent-presence__mention" disabled={Boolean(mentionBlock)} title={mentionBlock} aria-label={`在 Task Room @${presence.agent.name}`} onClick={() => {
+                  setLocalError("");
+                  mentionRequestSequence.current += 1;
+                  setMentionRequest(Object.freeze({ requestId: mentionRequestSequence.current, agentId: presence.agent.id }));
+                }}>
+                  <span className="agent-presence__avatar"><Bot size={14} /><i /></span>
+                  <span className="agent-presence__identity"><strong>{presence.agent.name}</strong><small>@{presence.agent.callsign} · {presence.detail}</small>{presence.activeTaskTitle && <em>{presence.activeTaskTitle}</em>}</span>
+                  <span className="agent-presence__state"><b>{AGENT_PRESENCE_LABEL[presence.state]}</b><small>{presence.workload > 0 ? `${presence.workload} 个任务` : `@${presence.agent.callsign}`}</small></span>
+                </button>
+                {scoped.projectPath && <button type="button" className="agent-presence__edit" aria-label={`编辑 ${presence.agent.name}`} onClick={() => setAgentDraft(scoped as ProjectAgentDefinition)}><Pencil size={11} /></button>}
+              </article>;
             })}
           </div>
           <footer><button type="button" className="button-secondary" disabled={!project} onClick={() => setAgentDraft("new")}><Plus size={13} />创建 Agent</button><small><CircleDot size={10} />状态来自 Workflow / AgentTask，不手工维护</small></footer>

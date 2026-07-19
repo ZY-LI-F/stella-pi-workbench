@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
   Ban,
@@ -23,6 +23,8 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { availableMentionAgentsForTask, parseAgentMentions } from "@shared/agent-mentions";
+import type { AgentMentionQuery } from "@shared/agent-mentions";
+import type { AgentPresence } from "@shared/agent-presence";
 import type {
   AgentTask,
   KanbanTask,
@@ -38,6 +40,7 @@ import type {
 import { projectTaskTimeline, type TaskTimelineEntry, type TaskTimelineKind } from "@shared/task-timeline";
 import { ACCEPTANCE_LABEL, EXECUTION_STATUS_LABEL, PRIORITY_LABEL, STAGE_LABEL, formatRelativeTime } from "./kanban-format";
 import { ArtifactDetails } from "./ArtifactDetails";
+import { AgentMentionInput, type AgentMentionRequest } from "./AgentMentionInput";
 import { WorkflowDag } from "./WorkflowDag";
 
 interface TaskDetailPanelProps {
@@ -61,11 +64,14 @@ interface TaskDetailPanelProps {
   readonly onReviewExecution: (input: ReviewExecutionInput) => Promise<void>;
   readonly onRevealPath: (path: string) => void;
   readonly onContinueInPi: (sessionPath: string) => Promise<void>;
+  readonly agentPresences?: readonly AgentPresence[];
+  readonly mentionRequest?: AgentMentionRequest;
   readonly variant?: "drawer" | "workspace";
 }
 
 interface MentionPreview {
-  readonly agents: readonly { readonly id: string; readonly name: string }[];
+  readonly agents: readonly { readonly id: string; readonly name: string; readonly callsign: string }[];
+  readonly coordinator?: boolean;
   readonly resumesLead?: boolean;
   readonly error?: string;
 }
@@ -116,6 +122,8 @@ export function TaskDetailPanel({
   onReviewExecution,
   onRevealPath,
   onContinueInPi,
+  agentPresences = [],
+  mentionRequest,
   variant = "drawer",
 }: TaskDetailPanelProps) {
   const [gateComment, setGateComment] = useState("");
@@ -123,6 +131,7 @@ export function TaskDetailPanel({
   const [reviewComment, setReviewComment] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
+  const [activeMentionQuery, setActiveMentionQuery] = useState<AgentMentionQuery>();
   const timeline = useMemo(
     () => projectTaskTimeline({ task, comments, activities, runs, agentTasks }),
     [activities, agentTasks, comments, runs, task],
@@ -147,6 +156,14 @@ export function TaskDetailPanel({
   const isRedispatch = task.stage === "blocked";
   const activeAgentTask = agentTasks.find((candidate) => candidate.id === task.activeAgentTaskId);
   const waitingCoordinator = activeAgentTask?.kind === "coordinator" && activeAgentTask.status === "waiting_human";
+  const mentionAgents = useMemo(() => availableMentionAgentsForTask(task, catalog, squads), [catalog, squads, task]);
+  const mentionsDisabledReason = task.activeRunId || task.activeAgentTaskId
+    ? waitingCoordinator
+      ? "LEAD 正在等待你的普通回复；当前不能并行创建新的 mention"
+      : "任务正在执行；请先中止或等待完成后再使用 @mention 分发"
+    : task.stage === "completed"
+      ? "已完成任务需先移回待规划列才能使用 @mention 分发"
+      : undefined;
   const rootAgentTask = [...agentTasks].reverse().find((candidate) => !candidate.parentAgentTaskId);
   const executionTruth = [
     ...(run ? [{ kind: "workflow" as const, execution: run }] : []),
@@ -159,8 +176,10 @@ export function TaskDetailPanel({
   const mentionPreview = useMemo<MentionPreview>(() => {
     if (!commentBody.trim()) return Object.freeze({ agents: Object.freeze([]) });
     try {
-      const availableAgents = availableMentionAgentsForTask(task, catalog, squads);
-      const agents = parseAgentMentions(commentBody, availableAgents).agents.map((agent) => Object.freeze({ id: agent.id, name: agent.name }));
+      const previewBody = activeMentionQuery
+        ? `${commentBody.slice(0, activeMentionQuery.start)}${commentBody.slice(activeMentionQuery.end)}`
+        : commentBody;
+      const agents = parseAgentMentions(previewBody, mentionAgents).agents.map((agent) => Object.freeze({ id: agent.id, name: agent.name, callsign: agent.callsign }));
       if (agents.length === 0 && waitingCoordinator) return Object.freeze({ agents: Object.freeze([]), resumesLead: true });
       if (agents.length > 0 && (task.activeRunId || task.activeAgentTaskId)) {
         return Object.freeze({ agents: Object.freeze(agents), error: "任务正在执行；请先中止或等待完成后再使用 @mention 分发" });
@@ -168,11 +187,20 @@ export function TaskDetailPanel({
       if (agents.length > 0 && task.stage === "completed") {
         return Object.freeze({ agents: Object.freeze(agents), error: "已完成任务需先移回待规划列才能使用 @mention 分发" });
       }
-      return Object.freeze({ agents: Object.freeze(agents) });
+      const coordinator = agents[0]?.id === "lead";
+      if (coordinator && agents.length > 1) {
+        return Object.freeze({ agents: Object.freeze(agents), coordinator, error: "@LEAD 协调模式不能与直接 Worker mention 混用；请让 LEAD 通过结构化计划委派" });
+      }
+      return Object.freeze({ agents: Object.freeze(agents), coordinator });
     } catch (cause) {
       return Object.freeze({ agents: Object.freeze([]), error: cause instanceof Error ? cause.message : String(cause) });
     }
-  }, [catalog, commentBody, squads, task, waitingCoordinator]);
+  }, [activeMentionQuery, commentBody, mentionAgents, task.activeAgentTaskId, task.activeRunId, task.stage, waitingCoordinator]);
+
+  useEffect(() => {
+    setCommentBody("");
+    setActiveMentionQuery(undefined);
+  }, [task.id]);
 
   const perform = async (action: () => Promise<void>) => {
     setError("");
@@ -291,7 +319,20 @@ export function TaskDetailPanel({
             });
           }}>
             <label htmlFor={`task-room-message-${task.id}`}>发送到 Task Room</label>
-            <textarea id={`task-room-message-${task.id}`} value={commentBody} onChange={(event) => setCommentBody(event.target.value)} rows={3} placeholder={waitingCoordinator ? "回复 LEAD 的问题；提交后自动进入下一决策回合…" : "补充上下文；用 @lead 调度团队，或 @builder 直接委派…"} />
+            <AgentMentionInput
+              id={`task-room-message-${task.id}`}
+              value={commentBody}
+              agents={mentionAgents}
+              presences={agentPresences}
+              mentionRequest={mentionRequest}
+              mentionsDisabled={Boolean(mentionsDisabledReason)}
+              mentionsDisabledReason={mentionsDisabledReason}
+              rows={3}
+              placeholder={waitingCoordinator ? "回复 LEAD 的问题；提交后自动进入下一决策回合…" : "补充上下文；输入 @ 选择 Agent，或直接发送普通消息…"}
+              onChange={setCommentBody}
+              onQueryChange={setActiveMentionQuery}
+              onRequestError={setError}
+            />
             {commentBody.trim() && (
               <div className={`mention-impact ${mentionPreview.error ? "is-error" : mentionPreview.agents.length > 0 ? "is-dispatch" : "is-comment"}`} role={mentionPreview.error ? "alert" : "status"}>
                 {mentionPreview.error
@@ -299,11 +340,11 @@ export function TaskDetailPanel({
                   : mentionPreview.resumesLead
                     ? <><GitBranch size={13} /><span>提交后将唤醒 @lead，创建新的 Coordinator 验收回合。</span></>
                     : mentionPreview.agents.length > 0
-                    ? <><GitBranch size={13} /><span>提交后将创建 {mentionPreview.agents.length} 个 AgentTask：{mentionPreview.agents.map((agent) => `${agent.name} (@${agent.id})`).join(" → ")}</span></>
+                    ? <><GitBranch size={13} /><span>{mentionPreview.coordinator ? "提交后将创建 1 个 Coordinator AgentTask" : `提交后将创建 ${mentionPreview.agents.length} 个 AgentTask`}：{mentionPreview.agents.map((agent) => `${agent.name} (@${agent.callsign})`).join(" → ")}</span></>
                     : <><MessageCircle size={13} /><span>提交后仅追加用户消息，不创建 AgentTask。</span></>}
               </div>
             )}
-            <button type="submit" className="button-secondary" aria-label="发送评论" disabled={busy || !commentBody.trim() || Boolean(mentionPreview.error)}><Send size={13} />发送消息</button>
+            <button type="submit" className="button-secondary" aria-label="发送评论" disabled={busy || !commentBody.trim() || Boolean(activeMentionQuery) || Boolean(mentionPreview.error)}><Send size={13} />发送消息</button>
           </form>
         </section>
       </div>

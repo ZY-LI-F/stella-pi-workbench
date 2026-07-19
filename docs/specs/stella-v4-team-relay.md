@@ -35,8 +35,11 @@ Team Chat uses three columns:
 
 ## Mention semantics
 
+- typing `@` opens a visible Agent roster constrained by the selected Task project and optional Squad; the query matches Unicode names, responsibilities, stable callsigns and ids.
+- every candidate exposes derived Presence, tool access and required Skills; roster chips and Team Pulse cards insert the same stable `@CALLSIGN` token.
+- Arrow Up / Down changes the active option, Enter / Tab inserts it, Escape dismisses the roster, and IME composition never triggers an accidental selection.
 - `@worker`: creates a direct or parent/child AgentTask group after an impact preview.
-- `@lead`: must be the first Agent mention and creates a `coordinator` root.
+- `@lead`: must be the first Agent mention and creates a `coordinator` root; LEAD and direct Worker mentions are mutually exclusive in one message, in both the renderer and the atomic main-process transaction.
 - a normal message while LEAD is `waiting_human`: appends the user message and creates a `coordinator-review` attempt.
 - unknown, ambiguous or out-of-project mentions reject the entire transaction.
 - no Task Room message is silently converted into a new Kanban Task.
@@ -86,5 +89,5 @@ Schema v4 stores `customAgents` in `board.json`. A project Agent contains the no
 ## Verification obligations
 
 - unit tests cover stage transitions, acceptance, restart interruption, project Agent boundaries, Presence projection, strict Coordinator parsing, real Worker creation, LEAD re-entry and invalid prose rejection;
-- Electron E2E covers sidebar Team entry, Task Channel selection, `@lead` impact preview, AgentDraft creation, Team Pulse rendering and screenshot capture;
+- Electron E2E covers sidebar Team entry, Task Channel selection, Chinese Agent roster search, stable callsign insertion, `@lead` impact preview, AgentDraft creation, Team Pulse one-click insertion, rendering and screenshot capture;
 - the existing deterministic and live pharmaceutical E2E suites remain part of regression checks.

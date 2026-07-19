@@ -1,4 +1,13 @@
 import type { BoardLane, ExecutionAcceptanceStatus, TaskPriority, TaskStage } from "@shared/kanban";
+import type { AgentPresenceState } from "@shared/agent-presence";
+
+export const AGENT_PRESENCE_LABEL: Readonly<Record<AgentPresenceState, string>> = Object.freeze({
+  available: "可用",
+  queued: "排队",
+  running: "执行中",
+  waiting: "等待",
+  attention: "需处理",
+});
 
 export const STAGE_LABEL: Readonly<Record<TaskStage, string>> = Object.freeze({
   planned: "待规划",

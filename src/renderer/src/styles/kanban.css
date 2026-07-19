@@ -1152,6 +1152,53 @@
 
 .task-room__composer > label { color: var(--text-soft); font-size: 7.5px; font-weight: 680; }
 
+.agent-mention-field { position: relative; display: grid; min-width: 0; gap: 6px; }
+.agent-mention-roster { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.agent-mention-roster > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; color: var(--text-faint); font-family: var(--font-mono); font-size: 6.5px; font-weight: 720; letter-spacing: .04em; }
+.agent-mention-roster > div { display: flex; min-width: 0; padding: 1px 1px 3px; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.agent-mention-roster > div::-webkit-scrollbar { display: none; }
+.agent-mention-roster button { height: 21px; padding: 0 7px; flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--surface) 76%, transparent); color: var(--text-muted); font-family: var(--font-mono); font-size: 6.5px; }
+.agent-mention-roster button:hover:not(:disabled),
+.agent-mention-roster button:focus-visible { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-strong); }
+.agent-mention-roster button.is-lead { border-color: color-mix(in srgb, var(--accent-warm) 30%, var(--border)); color: var(--accent-warm); }
+.agent-mention-roster button.is-selected { border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--accent); }
+.agent-mention-roster button:disabled { cursor: not-allowed; opacity: .48; }
+
+.agent-mention-picker { position: absolute; right: 0; bottom: calc(100% + 7px); left: 0; z-index: 5; display: grid; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-strong)); border-radius: 10px; background: color-mix(in srgb, var(--panel-elevated) 97%, transparent); box-shadow: 0 15px 35px color-mix(in srgb, var(--app-bg) 48%, transparent), inset 0 1px color-mix(in srgb, var(--accent) 10%, transparent); animation: mention-roster-reveal 140ms ease-out both; }
+.agent-mention-picker > header { display: flex; min-height: 31px; padding: 0 9px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+.agent-mention-picker > header span { display: flex; align-items: center; gap: 5px; color: var(--accent); font-family: var(--font-mono); font-size: 6.5px; font-weight: 760; letter-spacing: .08em; }
+.agent-mention-picker > header small { color: var(--text-faint); font-size: 6px; }
+.agent-mention-picker__list { max-height: 246px; padding: 4px; overflow-y: auto; }
+.agent-mention-picker__list > button { position: relative; display: grid; width: 100%; min-height: 54px; padding: 7px 8px; grid-template-columns: 30px minmax(130px, 1fr) minmax(112px, auto); align-items: center; gap: 8px; overflow: hidden; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-muted); text-align: left; }
+.agent-mention-picker__list > button::before { position: absolute; top: 8px; bottom: 8px; left: 0; width: 2px; border-radius: 2px; background: transparent; content: ""; }
+.agent-mention-picker__list > button:hover:not(:disabled),
+.agent-mention-picker__list > button.is-active:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 24%, var(--border)); background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, var(--surface)), color-mix(in srgb, var(--surface) 70%, transparent)); }
+.agent-mention-picker__list > button.is-active:not(:disabled)::before { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 72%, transparent); }
+.agent-mention-picker__list > button.is-restricted { cursor: not-allowed; opacity: .48; }
+.agent-mention-picker__avatar { position: relative; display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface); color: var(--text-muted); }
+.agent-mention-picker__avatar i { position: absolute; width: 31px; height: 12px; border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); border-radius: 50%; transform: rotate(-22deg); }
+.agent-mention-picker__identity { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.agent-mention-picker__identity strong { overflow: hidden; color: var(--text-soft); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-mention-picker__identity small { display: -webkit-box; overflow: hidden; color: var(--text-faint); font-size: 6.5px; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.agent-mention-picker__meta { display: flex; min-width: 112px; align-items: flex-end; flex-direction: column; gap: 2px; }
+.agent-mention-picker__meta code { color: var(--accent-strong); font-family: var(--font-mono); font-size: 7px; font-weight: 760; }
+.agent-mention-picker__meta b { color: var(--text-muted); font-size: 6.5px; font-weight: 680; }
+.agent-mention-picker__meta b.is-running { color: var(--success); }
+.agent-mention-picker__meta b.is-waiting { color: var(--accent-warm); }
+.agent-mention-picker__meta b.is-attention { color: var(--danger); }
+.agent-mention-picker__meta b.is-queued { color: var(--accent); }
+.agent-mention-picker__meta small { display: flex; max-width: 160px; align-items: center; gap: 3px; overflow: hidden; color: var(--text-faint); font-size: 5.5px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-mention-picker__empty { display: flex; min-height: 78px; align-items: center; justify-content: center; flex-direction: column; gap: 3px; color: var(--text-faint); text-align: center; }
+.agent-mention-picker__empty svg { margin-bottom: 2px; color: var(--accent); }
+.agent-mention-picker__empty strong { color: var(--text-muted); font-size: 8px; }
+.agent-mention-picker__empty span { font-size: 6.5px; }
+.agent-mention-picker > footer { display: flex; min-height: 25px; padding: 0 9px; align-items: center; gap: 11px; border-top: 1px solid var(--border); color: var(--text-faint); font-family: var(--font-mono); font-size: 5.5px; }
+
+@keyframes mention-roster-reveal {
+  from { opacity: 0; transform: translateY(4px) scale(.992); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
 .mention-impact {
   display: flex;
   min-height: 31px;
@@ -2454,6 +2501,7 @@
 :root[data-skin="chenxi"] .task-room-entry__body,
 :root[data-skin="chenxi"] .task-room__composer,
 :root[data-skin="chenxi"] .task-room__inline-control,
+:root[data-skin="chenxi"] .agent-mention-picker,
 :root[data-skin="chenxi"] .workflow-dag,
 :root[data-skin="chenxi"] .workflow-dag-node,
 :root[data-skin="chenxi"] .workflow-dag-detail {
@@ -2519,6 +2567,9 @@
 :root[data-skin="dingyang"] .task-room__inline-control,
 :root[data-skin="dingyang"] .task-room-entry__provenance span,
 :root[data-skin="dingyang"] .task-room-entry__provenance code,
+:root[data-skin="dingyang"] .agent-mention-picker,
+:root[data-skin="dingyang"] .agent-mention-picker__list > button,
+:root[data-skin="dingyang"] .agent-mention-picker__avatar,
 :root[data-skin="dingyang"] .workflow-dag,
 :root[data-skin="dingyang"] .workflow-dag-node,
 :root[data-skin="dingyang"] .workflow-dag-node > span,
@@ -2699,8 +2750,15 @@
 .team-pulse__legend i.waiting { background: var(--accent-warm); }
 .team-pulse__legend i.available { background: var(--text-faint); }
 .team-pulse__list { min-height: 0; padding: 8px; overflow-y: auto; }
-.agent-presence { display: grid; width: 100%; min-height: 60px; margin: 2px 0; padding: 8px; grid-template-columns: 31px minmax(0, 1fr) auto; align-items: center; gap: 7px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--text-muted); text-align: left; }
+.agent-presence { position: relative; display: block; width: 100%; min-height: 60px; margin: 2px 0; overflow: hidden; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--text-muted); }
 .agent-presence:hover { border-color: var(--border); background: var(--surface-hover); }
+.agent-presence__mention { display: grid; width: 100%; min-height: 58px; padding: 8px; grid-template-columns: 31px minmax(0, 1fr) auto; align-items: center; gap: 7px; border: 0; background: transparent; color: inherit; text-align: left; }
+.agent-presence__mention:not(:disabled) { cursor: pointer; }
+.agent-presence__mention:disabled { cursor: not-allowed; opacity: .52; }
+.agent-presence__mention:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -3px; }
+.agent-presence__edit { position: absolute; z-index: 2; top: 3px; right: 3px; display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 6px; background: color-mix(in srgb, var(--panel-elevated) 84%, transparent); color: var(--text-faint); opacity: 0; }
+.agent-presence:hover .agent-presence__edit,
+.agent-presence__edit:focus-visible { border-color: var(--border); color: var(--accent); opacity: 1; }
 .agent-presence__avatar { position: relative; display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface); color: var(--text-muted); }
 .agent-presence__avatar i { position: absolute; right: -1px; bottom: 0; width: 7px; height: 7px; border: 2px solid var(--panel); border-radius: 50%; background: var(--text-faint); }
 .agent-presence--running .agent-presence__avatar { border-color: color-mix(in srgb, var(--success) 55%, var(--border)); color: var(--success); box-shadow: 0 0 14px color-mix(in srgb, var(--success) 14%, transparent); }
@@ -2708,7 +2766,7 @@
 .agent-presence--queued .agent-presence__avatar i { background: var(--accent); }
 .agent-presence--waiting .agent-presence__avatar i { background: var(--accent-warm); }
 .agent-presence--attention .agent-presence__avatar i { background: var(--danger); }
-.agent-presence > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.agent-presence__identity { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .agent-presence strong { overflow: hidden; color: var(--text-soft); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-presence small { overflow: hidden; color: var(--text-faint); font-size: 6.5px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-presence em { overflow: hidden; color: var(--accent); font-size: 6.5px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
@@ -2839,6 +2897,7 @@
     animation: none;
   }
   .agent-presence--running .agent-presence__avatar i { animation: none; }
+  .agent-mention-picker { animation: none; }
 
   .task-room *,
   .task-room *::before,

@@ -12,6 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import type { ProjectMeta, StellaDesktopApi } from "@shared/contracts";
+import { deriveAgentPresences } from "@shared/agent-presence";
 import {
   boardLaneForStage,
   type BoardLane,
@@ -305,6 +306,7 @@ export function KanbanWorkspace({
             }}
             onRevealPath={(path) => void api.revealPath(path)}
             onContinueInPi={(sessionPath) => onContinueTaskSession(selectedTask.id, sessionPath)}
+            agentPresences={deriveAgentPresences(board, catalog, selectedTask.projectPath)}
           />
         )}
       </div>

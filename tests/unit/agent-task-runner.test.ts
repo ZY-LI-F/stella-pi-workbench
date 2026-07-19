@@ -210,6 +210,16 @@ describe("AgentTaskRunner", () => {
     expect(repository.state.agentTasks).toHaveLength(before.agentTasks.length);
   });
 
+  it("rejects mixing LEAD coordinator mode with direct Worker mentions atomically", async () => {
+    const { repository, agentTaskService, createTask } = await setup();
+    const taskId = await createTask("拒绝混合协调协议");
+    const before = repository.state;
+    await expect(agentTaskService.addComment({ taskId, body: "@lead 请规划，并让 @builder 直接开始" })).rejects.toThrow("不能与直接 Worker mention 混用");
+    expect(repository.state.comments).toHaveLength(before.comments.length);
+    expect(repository.state.agentTasks).toHaveLength(before.agentTasks.length);
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("planned");
+  });
+
   it("lets @lead delegate with a strict action, review worker evidence, and report for human acceptance", async () => {
     const runtimeFactory = new FakeAgentRuntimeFactory([
       JSON.stringify({ action: "delegate", summary: "先实现再由我验收", delegations: [{ agentId: "builder", objective: "完成真实修改", acceptanceCriteria: "测试通过并报告证据" }] }),

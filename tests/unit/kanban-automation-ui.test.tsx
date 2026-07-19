@@ -156,10 +156,10 @@ describe("Kanban automation interactions", () => {
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("补充上下文；用 @lead 调度团队，或 @builder 直接委派…"), "请先读取现有测试");
+    await user.type(screen.getByPlaceholderText("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…"), "请先读取现有测试");
     await user.click(screen.getByRole("button", { name: "发送评论" }));
     await waitFor(() => expect(onAddComment).toHaveBeenCalledWith("请先读取现有测试"));
-    expect((screen.getByPlaceholderText("补充上下文；用 @lead 调度团队，或 @builder 直接委派…") as HTMLTextAreaElement).value).toBe("");
+    expect((screen.getByPlaceholderText("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…") as HTMLTextAreaElement).value).toBe("");
   });
 
   it("previews every AgentTask side effect before an @mention message is submitted", async () => {
@@ -190,14 +190,141 @@ describe("Kanban automation interactions", () => {
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("补充上下文；用 @lead 调度团队，或 @builder 直接委派…"), "@builder 实现后交给 @VERIFY 验证");
+    await user.type(screen.getByPlaceholderText("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…"), "@builder 实现后交给 @VERIFY 验证");
     expect(screen.getByRole("status").textContent).toContain("提交后将创建 2 个 AgentTask");
-    expect(screen.getByRole("status").textContent).toContain("实现工程师 (@builder)");
-    expect(screen.getByRole("status").textContent).toContain("验证工程师 (@tester)");
+    expect(screen.getByRole("status").textContent).toContain("实现工程师 (@BUILD)");
+    expect(screen.getByRole("status").textContent).toContain("验证工程师 (@VERIFY)");
     expect(onAddComment).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "发送评论" }));
     await waitFor(() => expect(onAddComment).toHaveBeenCalledWith("@builder 实现后交给 @VERIFY 验证"));
+  });
+
+  it("opens the Agent roster for a Chinese @ query and inserts the stable callsign", async () => {
+    const user = userEvent.setup();
+    render(
+      <TaskDetailPanel
+        task={TASK}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={async () => undefined}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
+        onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
+      />,
+    );
+
+    const composer = screen.getByPlaceholderText("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…") as HTMLTextAreaElement;
+    await user.type(composer, "请让 @策略");
+    const picker = screen.getByRole("listbox", { name: "选择要 @ 的 Agent" });
+    expect(picker.textContent).toContain("靶点策略负责人");
+    await user.click(screen.getByRole("option", { name: /靶点策略负责人/ }));
+    expect(composer.value).toBe("请让 @STRATEGY ");
+    expect(screen.getByRole("status").textContent).toContain("靶点策略负责人 (@STRATEGY)");
+  });
+
+  it("supports keyboard selection and prevents mixing LEAD with direct Worker mentions", async () => {
+    const user = userEvent.setup();
+    render(
+      <TaskDetailPanel
+        task={TASK}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={async () => undefined}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
+        onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
+      />,
+    );
+
+    const composer = screen.getByPlaceholderText("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…") as HTMLTextAreaElement;
+    await user.type(composer, "@str");
+    await user.keyboard("{Enter}");
+    expect(composer.value).toBe("@STRATEGY ");
+    expect((screen.getByRole("button", { name: "@ 通用调度负责人" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "@ 通用调度负责人" }).getAttribute("title")).toContain("移除直接 Worker");
+  });
+
+  it("inserts an Agent requested from Team Pulse at the current composer caret", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <TaskDetailPanel
+        task={TASK}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={async () => undefined}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
+        onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
+      />,
+    );
+    const composer = screen.getByPlaceholderText("补充上下文；输入 @ 选择 Agent，或直接发送普通消息…") as HTMLTextAreaElement;
+    await user.type(composer, "请讨论");
+    rerender(
+      <TaskDetailPanel
+        task={TASK}
+        catalog={BUILTIN_ORCHESTRATION_CATALOG}
+        squads={[]}
+        runs={[]}
+        agentTasks={[]}
+        comments={[]}
+        activities={[]}
+        busy={false}
+        executionEnabled={true}
+        mentionRequest={{ requestId: 1, agentId: "target-strategist" }}
+        onClose={() => undefined}
+        onEdit={() => undefined}
+        onDispatch={async () => undefined}
+        onAbort={async () => undefined}
+        onDelete={async () => undefined}
+        onAddComment={async () => undefined}
+        onMove={async () => undefined}
+        onResolveGate={async () => undefined}
+        onReviewExecution={async () => undefined}
+        onRevealPath={() => undefined}
+        onContinueInPi={async () => undefined}
+      />,
+    );
+    await waitFor(() => expect(composer.value).toBe("请讨论 @STRATEGY "));
   });
 
   it("continues only the explicitly selected task source session in Pi", async () => {
