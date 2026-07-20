@@ -150,6 +150,19 @@ describe("runtimeReducer", () => {
     expect(state.extensionRequest).toBeUndefined();
   });
 
+  it("clears the runtime error banner once the runtime reports ready again", () => {
+    let state = runtimeReducer(readyState(), {
+      type: "BRIDGE_EVENT",
+      event: { source: "runtime", payload: { type: "runtime_exit", code: 1, signal: null } },
+    });
+    expect(state.error).toContain("Pi RPC 已退出");
+    state = runtimeReducer(state, {
+      type: "BRIDGE_EVENT",
+      event: { source: "runtime", payload: { type: "runtime_ready", cwd: "C:/workspace" } },
+    });
+    expect(state.error).toBeUndefined();
+  });
+
   it("surfaces runtime protocol failures", () => {
     const result = runtimeReducer(readyState(), {
       type: "BRIDGE_EVENT",

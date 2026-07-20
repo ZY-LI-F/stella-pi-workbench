@@ -110,9 +110,19 @@ export interface KanbanController {
 export function useKanban(api: StellaDesktopApi): KanbanController {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const taskCapabilityState = useRef<CapabilityState | undefined>(undefined);
+  const bootstrapEpoch = useRef(0);
 
   useEffect(() => {
     let active = true;
+    const initialize = () => {
+      const epoch = bootstrapEpoch.current;
+      void api.boardInitialize()
+        .then((bootstrap) => {
+          // 若等待期间已应用更新的快照，丢弃过期的 initialize 结果，避免状态回滚。
+          if (active && bootstrapEpoch.current === epoch) dispatch({ type: "BOOTSTRAP", bootstrap });
+        })
+        .catch((error: unknown) => { if (active) dispatch({ type: "FAILED", error: errorMessage(error) }); });
+    };
     const unsubscribe = api.onEvent((event: BridgeEvent) => {
       if (!active) return;
       if (event.source === "capability") {
@@ -120,21 +130,20 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
         const next = event.payload.snapshot.task.state;
         taskCapabilityState.current = next;
         if (next !== "ready" || previous === "ready") return;
-        void api.boardInitialize()
-          .then((bootstrap) => { if (active) dispatch({ type: "BOOTSTRAP", bootstrap }); })
-          .catch((error: unknown) => { if (active) dispatch({ type: "FAILED", error: errorMessage(error) }); });
+        initialize();
         return;
       }
       if (event.source !== "board") return;
-      if (event.payload.type === "snapshot") dispatch({ type: "BOOTSTRAP", bootstrap: event.payload.bootstrap });
+      if (event.payload.type === "snapshot") {
+        bootstrapEpoch.current += 1;
+        dispatch({ type: "BOOTSTRAP", bootstrap: event.payload.bootstrap });
+      }
       else if (event.payload.type === "agent-event") dispatch({ type: "EVENT", event: event.payload });
       else if (event.payload.type === "agent-task-event") dispatch({ type: "AGENT_TASK_EVENT", event: event.payload });
       else if (event.payload.type === "automation-runtime") dispatch({ type: "AUTOMATION_RUNTIME", status: event.payload.status });
       else if (event.payload.type === "automation-error") dispatch({ type: "FAILED", error: event.payload.message });
     });
-    void api.boardInitialize()
-      .then((bootstrap) => { if (active) dispatch({ type: "BOOTSTRAP", bootstrap }); })
-      .catch((error: unknown) => { if (active) dispatch({ type: "FAILED", error: errorMessage(error) }); });
+    initialize();
     return () => {
       active = false;
       unsubscribe();
@@ -145,6 +154,7 @@ export function useKanban(api: StellaDesktopApi): KanbanController {
     dispatch({ type: "PENDING", key, active: true });
     try {
       const bootstrap = await operation();
+      bootstrapEpoch.current += 1;
       dispatch({ type: "BOOTSTRAP", bootstrap });
       return bootstrap;
     } catch (error) {

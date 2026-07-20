@@ -301,18 +301,3 @@ export function catalogForBoard(base: OrchestrationCatalog, board: Pick<BoardSta
     workflows: base.workflows,
   });
 }
-
-export function findWorkflow(workflowId: string): WorkflowDefinition {
-  const workflow = BUILTIN_WORKFLOWS.find((candidate) => candidate.id === workflowId);
-  if (!workflow) throw new Error(`未知流程模板: ${workflowId}`);
-  return workflow;
-}
-
-export function agentsForWorkflow(definition: WorkflowDefinition): readonly AgentDefinition[] {
-  const ids = new Set(definition.steps.filter((step) => step.kind === "agent").map((step) => step.agentId));
-  return Object.freeze([...ids].map((id) => {
-    const matchedAgent = BUILTIN_AGENTS.find((candidate) => candidate.id === id);
-    if (!matchedAgent) throw new Error(`流程 ${definition.id} 引用了未知 Agent: ${id}`);
-    return matchedAgent;
-  }));
-}

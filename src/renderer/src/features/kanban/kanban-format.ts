@@ -1,4 +1,4 @@
-import type { BoardLane, ExecutionAcceptanceStatus, TaskPriority, TaskStage } from "@shared/kanban";
+import { TASK_STAGES, type BoardLane, type ExecutionAcceptanceStatus, type TaskPriority, type TaskStage } from "@shared/kanban";
 import type { AgentPresenceState } from "@shared/agent-presence";
 
 export const AGENT_PRESENCE_LABEL: Readonly<Record<AgentPresenceState, string>> = Object.freeze({
@@ -49,19 +49,22 @@ export const EXECUTION_STATUS_LABEL: Readonly<Record<string, string>> = Object.f
   cancelled: "已取消",
 });
 
+// Record<TaskStage, …> 保证新增 stage 时缺失泳道配置会直接编译失败。
+const LANE_META: Readonly<Record<TaskStage, { readonly code: string; readonly empty: string }>> = Object.freeze({
+  planned: Object.freeze({ code: "PLAN", empty: "把下一项工作放到这里" }),
+  queued: Object.freeze({ code: "QUEUE", empty: "暂无等待席位的流程" }),
+  running: Object.freeze({ code: "ORBIT", empty: "Agent 运行时会在这里留下星轨" }),
+  review: Object.freeze({ code: "GATE", empty: "人工关卡将在这里等待" }),
+  blocked: Object.freeze({ code: "HOLD", empty: "失败、中断与阻塞任务" }),
+  completed: Object.freeze({ code: "DONE", empty: "验收完成的任务会抵达这里" }),
+});
+
 export const LANE_CONFIG: readonly {
   readonly id: BoardLane;
   readonly label: string;
   readonly code: string;
   readonly empty: string;
-}[] = Object.freeze([
-  { id: "planned", label: "待规划", code: "PLAN", empty: "把下一项工作放到这里" },
-  { id: "queued", label: "待运行", code: "QUEUE", empty: "暂无等待席位的流程" },
-  { id: "running", label: "执行中", code: "ORBIT", empty: "Agent 运行时会在这里留下星轨" },
-  { id: "review", label: "待审核", code: "GATE", empty: "人工关卡将在这里等待" },
-  { id: "blocked", label: "受阻", code: "HOLD", empty: "失败、中断与阻塞任务" },
-  { id: "completed", label: "已完成", code: "DONE", empty: "验收完成的任务会抵达这里" },
-]);
+}[] = Object.freeze(TASK_STAGES.map((stage) => Object.freeze({ id: stage, label: STAGE_LABEL[stage], ...LANE_META[stage] })));
 
 export function formatRelativeTime(dateString: string): string {
   const elapsed = Date.now() - new Date(dateString).getTime();

@@ -89,6 +89,7 @@ describe("shared WorkspaceAdmission integration", () => {
       admission,
       emitBoardEvent: () => undefined,
       globalModel: () => undefined,
+      resolveProjectPath: async (projectPath) => projectPath,
       id,
       now,
     });
@@ -98,6 +99,7 @@ describe("shared WorkspaceAdmission integration", () => {
       admission,
       emitBoardEvent: () => undefined,
       globalModel: () => undefined,
+      resolveProjectPath: async (projectPath) => projectPath,
     });
 
     await boardService.createTask({

@@ -36,16 +36,19 @@ export const AGENT_TASK_STATUSES = [
 export type AgentTaskStatus = (typeof AGENT_TASK_STATUSES)[number];
 export const TERMINAL_AGENT_TASK_STATUSES = ["reported", "failed", "interrupted", "cancelled"] as const;
 
-export const BOARD_LANES = ["planned", "queued", "running", "review", "blocked", "completed"] as const;
-export type BoardLane = (typeof BOARD_LANES)[number];
-export type ManualTaskStage = "planned" | "blocked" | "completed";
+export type BoardLane = TaskStage;
+export const MANUAL_TASK_STAGES = ["planned", "blocked", "completed"] as const satisfies readonly TaskStage[];
+export type ManualTaskStage = (typeof MANUAL_TASK_STAGES)[number];
 
-export type WorkflowRunStatus = "queued" | "running" | "review" | "blocked" | "failed" | "interrupted" | "reported";
-export type StepRunStatus = "pending" | "running" | "waiting" | "succeeded" | "failed" | "interrupted";
+export const WORKFLOW_RUN_STATUSES = ["queued", "running", "review", "blocked", "failed", "interrupted", "reported"] as const;
+export type WorkflowRunStatus = (typeof WORKFLOW_RUN_STATUSES)[number];
+export const STEP_RUN_STATUSES = ["pending", "running", "waiting", "succeeded", "failed", "interrupted"] as const;
+export type StepRunStatus = (typeof STEP_RUN_STATUSES)[number];
 export const EXECUTION_ACCEPTANCE_STATUSES = ["not-ready", "pending", "accepted", "revision-requested", "rejected"] as const;
 export type ExecutionAcceptanceStatus = (typeof EXECUTION_ACCEPTANCE_STATUSES)[number];
 export type WorkspaceAccess = "read" | "write";
-export type AgentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const AGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type AgentThinkingLevel = (typeof AGENT_THINKING_LEVELS)[number];
 
 export interface AgentDefinition {
   readonly id: string;
@@ -179,17 +182,19 @@ export interface WorkflowRun {
   readonly completedAt?: string;
 }
 
-export type ActivityKind =
-  | "task"
-  | "dispatch"
-  | "status"
-  | "agent"
-  | "tool"
-  | "artifact"
-  | "gate"
-  | "comment"
-  | "automation"
-  | "error";
+export const ACTIVITY_KINDS = [
+  "task",
+  "dispatch",
+  "status",
+  "agent",
+  "tool",
+  "artifact",
+  "gate",
+  "comment",
+  "automation",
+  "error",
+] as const;
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
 export interface TaskActivity {
   readonly id: string;
@@ -203,10 +208,12 @@ export interface TaskActivity {
   readonly createdAt: string;
 }
 
-export type TaskCommentAuthor = "user" | "agent" | "system";
-export type TaskMessageKind = "comment" | "execution-report" | "acceptance";
+export const TASK_COMMENT_AUTHORS = ["user", "agent", "system"] as const;
+export type TaskCommentAuthor = (typeof TASK_COMMENT_AUTHORS)[number];
+export const TASK_MESSAGE_KINDS = ["comment", "execution-report", "acceptance"] as const;
+export type TaskMessageKind = (typeof TASK_MESSAGE_KINDS)[number];
 
-export interface TaskMessage {
+export interface TaskComment {
   readonly id: string;
   readonly taskId: string;
   readonly author: TaskCommentAuthor;
@@ -218,9 +225,8 @@ export interface TaskMessage {
   readonly createdAt: string;
 }
 
-export type TaskComment = TaskMessage;
-
-export type AgentTaskKind = "direct" | "mention-root" | "squad-leader" | "coordinator" | "coordinator-review" | "delegated";
+export const AGENT_TASK_KINDS = ["direct", "mention-root", "squad-leader", "coordinator", "coordinator-review", "delegated"] as const;
+export type AgentTaskKind = (typeof AGENT_TASK_KINDS)[number];
 
 export interface AgentTask {
   readonly id: string;
@@ -270,6 +276,8 @@ export type AutopilotTrigger =
   | { readonly kind: "schedule"; readonly intervalMinutes: number; readonly nextRunAt: string }
   | { readonly kind: "webhook"; readonly token: string };
 
+export const AUTOPILOT_TRIGGER_KINDS = ["manual", "schedule", "webhook"] as const satisfies readonly AutopilotTrigger["kind"][];
+
 export interface Autopilot {
   readonly id: string;
   readonly name: string;
@@ -284,7 +292,8 @@ export interface Autopilot {
   readonly updatedAt: string;
 }
 
-export type AutopilotRunStatus = "running" | "succeeded" | "failed" | "missed";
+export const AUTOPILOT_RUN_STATUSES = ["running", "succeeded", "failed", "missed"] as const;
+export type AutopilotRunStatus = (typeof AUTOPILOT_RUN_STATUSES)[number];
 export type JsonObject = Readonly<Record<string, unknown>>;
 
 export interface AutopilotRun {
@@ -351,7 +360,7 @@ export type BoardBridgeEvent =
       readonly toolName?: string;
       readonly message?: string;
     }
-  | { readonly type: "automation-error"; readonly source: "agent-task-runner" | "schedule" | "webhook"; readonly message: string }
+  | { readonly type: "automation-error"; readonly source: "agent-task-runner" | "workflow-orchestrator" | "schedule" | "webhook"; readonly message: string }
   | { readonly type: "automation-runtime"; readonly status: AutomationRuntimeStatus };
 
 export interface CreateTaskInput {
@@ -473,12 +482,8 @@ export const EMPTY_BOARD_STATE: BoardState = Object.freeze({
   autopilotRuns: Object.freeze([]),
 });
 
-const MANUAL_STAGES = new Set<TaskStage>(["planned", "blocked", "completed"]);
+const MANUAL_STAGES = new Set<TaskStage>(MANUAL_TASK_STAGES);
 const TERMINAL_AGENT_TASK_SET = new Set<AgentTaskStatus>(TERMINAL_AGENT_TASK_STATUSES);
-
-export function boardLaneForStage(stage: TaskStage): BoardLane {
-  return stage;
-}
 
 export function canMoveTaskManually(task: KanbanTask, next: TaskStage): next is ManualTaskStage {
   return task.activeRunId === undefined && task.activeAgentTaskId === undefined && MANUAL_STAGES.has(next);
@@ -497,12 +502,6 @@ export function activeStep(run: WorkflowRun | undefined): StepRun | undefined {
 
 export function isTerminalAgentTaskStatus(status: AgentTaskStatus): boolean {
   return TERMINAL_AGENT_TASK_SET.has(status);
-}
-
-export function executionTargetId(target: ExecutionTarget): string {
-  if (target.kind === "workflow") return target.workflowId;
-  if (target.kind === "agent") return target.agentId;
-  return target.squadId;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -582,12 +581,13 @@ function assertAgent(value: unknown, path: string): asserts value is AgentDefini
   assertPositiveInteger(value.version, `${path}.version`);
   assertString(value.name, `${path}.name`);
   assertString(value.callsign, `${path}.callsign`);
+  if (!/^[A-Z0-9_-]+$/u.test(value.callsign)) throw new Error(`${path}.callsign 只能包含大写英文字母、数字、下划线或连字符`);
   assertString(value.responsibility, `${path}.responsibility`);
   assertString(value.instructions, `${path}.instructions`);
   assertOneOf(value.workspaceAccess, ["read", "write"] as const, `${path}.workspaceAccess`);
   assertStringArray(value.allowedTools, `${path}.allowedTools`);
   if (value.requiredSkills !== undefined) assertStringArray(value.requiredSkills, `${path}.requiredSkills`);
-  assertOneOf(value.thinking, ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, `${path}.thinking`);
+  assertOneOf(value.thinking, AGENT_THINKING_LEVELS, `${path}.thinking`);
   assertOptionalString(value.provider, `${path}.provider`);
   assertOptionalString(value.model, `${path}.model`);
   for (const key of ["disableExtensions", "disableSkills", "disablePromptTemplates"] as const) {
@@ -656,7 +656,7 @@ function assertStepRun(value: unknown, path: string): asserts value is StepRun {
   if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
   for (const key of ["id", "stepId", "name"] as const) assertString(value[key], `${path}.${key}`);
   assertOneOf(value.stepKind, ["agent", "human-gate"] as const, `${path}.stepKind`);
-  assertOneOf(value.status, ["pending", "running", "waiting", "succeeded", "failed", "interrupted"] as const, `${path}.status`);
+  assertOneOf(value.status, STEP_RUN_STATUSES, `${path}.status`);
   assertOptionalString(value.agentId, `${path}.agentId`);
   assertOptionalString(value.sessionPath, `${path}.sessionPath`);
   assertOptionalString(value.error, `${path}.error`);
@@ -672,7 +672,7 @@ function assertRun(value: unknown, path: string): asserts value is WorkflowRun {
   assertWorkflow(value.workflow, `${path}.workflow`);
   if (!Array.isArray(value.agents)) throw new Error(`${path}.agents 必须是数组`);
   value.agents.forEach((agent, index) => assertAgent(agent, `${path}.agents[${index}]`));
-  assertOneOf(value.status, ["queued", "running", "review", "blocked", "failed", "interrupted", "reported"] as const, `${path}.status`);
+  assertOneOf(value.status, WORKFLOW_RUN_STATUSES, `${path}.status`);
   assertOneOf(value.acceptance, EXECUTION_ACCEPTANCE_STATUSES, `${path}.acceptance`);
   assertOptionalString(value.acceptanceComment, `${path}.acceptanceComment`);
   assertOptionalIsoDate(value.reviewedAt, `${path}.reviewedAt`);
@@ -710,7 +710,7 @@ function assertActivity(value: unknown, path: string): asserts value is TaskActi
   assertOptionalString(value.runId, `${path}.runId`);
   assertOptionalString(value.stepId, `${path}.stepId`);
   assertOptionalString(value.agentTaskId, `${path}.agentTaskId`);
-  assertOneOf(value.kind, ["task", "dispatch", "status", "agent", "tool", "artifact", "gate", "comment", "automation", "error"] as const, `${path}.kind`);
+  assertOneOf(value.kind, ACTIVITY_KINDS, `${path}.kind`);
   assertString(value.summary, `${path}.summary`);
   assertOptionalString(value.detail, `${path}.detail`);
   assertIsoDate(value.createdAt, `${path}.createdAt`);
@@ -720,9 +720,9 @@ function assertComment(value: unknown, path: string): asserts value is TaskComme
   if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
   assertString(value.id, `${path}.id`);
   assertString(value.taskId, `${path}.taskId`);
-  assertOneOf(value.author, ["user", "agent", "system"] as const, `${path}.author`);
+  assertOneOf(value.author, TASK_COMMENT_AUTHORS, `${path}.author`);
   assertOptionalString(value.authorAgentId, `${path}.authorAgentId`);
-  if (value.messageKind !== undefined) assertOneOf(value.messageKind, ["comment", "execution-report", "acceptance"] as const, `${path}.messageKind`);
+  if (value.messageKind !== undefined) assertOneOf(value.messageKind, TASK_MESSAGE_KINDS, `${path}.messageKind`);
   assertOptionalString(value.runId, `${path}.runId`);
   assertOptionalString(value.agentTaskId, `${path}.agentTaskId`);
   assertString(value.body, `${path}.body`);
@@ -736,7 +736,7 @@ function assertAgentTask(value: unknown, path: string): asserts value is AgentTa
   assertString(value.id, `${path}.id`);
   assertString(value.taskId, `${path}.taskId`);
   assertAgent(value.agentSnapshot, `${path}.agentSnapshot`);
-  assertOneOf(value.kind, ["direct", "mention-root", "squad-leader", "coordinator", "coordinator-review", "delegated"] as const, `${path}.kind`);
+  assertOneOf(value.kind, AGENT_TASK_KINDS, `${path}.kind`);
   assertOneOf(value.status, AGENT_TASK_STATUSES, `${path}.status`);
   assertOneOf(value.acceptance, EXECUTION_ACCEPTANCE_STATUSES, `${path}.acceptance`);
   assertOptionalString(value.acceptanceComment, `${path}.acceptanceComment`);
@@ -792,7 +792,7 @@ function assertTaskTemplate(value: unknown, path: string): asserts value is Auto
 
 function assertAutopilotTrigger(value: unknown, path: string): asserts value is AutopilotTrigger {
   if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
-  assertOneOf(value.kind, ["manual", "schedule", "webhook"] as const, `${path}.kind`);
+  assertOneOf(value.kind, AUTOPILOT_TRIGGER_KINDS, `${path}.kind`);
   if (value.kind === "schedule") {
     assertPositiveInteger(value.intervalMinutes, `${path}.intervalMinutes`);
     assertIsoDate(value.nextRunAt, `${path}.nextRunAt`);
@@ -836,8 +836,8 @@ function assertAutopilotRun(value: unknown, path: string): asserts value is Auto
   if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
   assertString(value.id, `${path}.id`);
   assertString(value.autopilotId, `${path}.autopilotId`);
-  assertOneOf(value.triggerKind, ["manual", "schedule", "webhook"] as const, `${path}.triggerKind`);
-  assertOneOf(value.status, ["running", "succeeded", "failed", "missed"] as const, `${path}.status`);
+  assertOneOf(value.triggerKind, AUTOPILOT_TRIGGER_KINDS, `${path}.triggerKind`);
+  assertOneOf(value.status, AUTOPILOT_RUN_STATUSES, `${path}.status`);
   assertOptionalString(value.taskId, `${path}.taskId`);
   assertOptionalString(value.error, `${path}.error`);
   if (value.requestPayload !== undefined) {

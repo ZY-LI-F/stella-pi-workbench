@@ -1,8 +1,9 @@
 import React from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_PREFERENCES,
   LEGACY_PREFERENCES_STORAGE_KEY,
   PREFERENCES_STORAGE_KEY,
   parsePreferences,
@@ -17,11 +18,14 @@ const LEGACY_PREFERENCES = Object.freeze({
 });
 
 function PreferencesHarness() {
-  const [preferences, setPreferences] = usePreferences();
+  const [preferences, setPreferences, storageError] = usePreferences();
   return (
-    <button type="button" onClick={() => setPreferences(Object.freeze({ ...preferences, skin: "chenxi" }))}>
-      {preferences.skin}
-    </button>
+    <>
+      <button type="button" onClick={() => setPreferences(Object.freeze({ ...preferences, skin: "chenxi" }))}>
+        {preferences.skin}
+      </button>
+      {storageError && <p role="alert">{storageError}</p>}
+    </>
   );
 }
 
@@ -39,6 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   document.documentElement.removeAttribute("data-skin");
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("data-density");
@@ -70,5 +75,52 @@ describe("preferences", () => {
     expect(screen.getByRole("button", { name: "chenxi" })).toBeTruthy();
     expect(JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? "null").skin).toBe("chenxi");
     await waitFor(() => expect(document.documentElement.dataset.skin).toBe("chenxi"));
+  });
+
+  it("uses explicit defaults while preserving corrupted v2 JSON for diagnosis", () => {
+    const corrupted = "{corrupted json";
+    localStorage.setItem(PREFERENCES_STORAGE_KEY, corrupted);
+    expect(() => render(<PreferencesHarness />)).not.toThrow();
+    expect(screen.getByRole("button", { name: DEFAULT_PREFERENCES.skin })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("原数据已保留");
+    expect(localStorage.getItem(PREFERENCES_STORAGE_KEY)).toBe(corrupted);
+  });
+
+  it("preserves v2 preferences with an invalid shape and exposes the error", () => {
+    const invalid = JSON.stringify({ skin: "unknown", theme: 42 });
+    localStorage.setItem(PREFERENCES_STORAGE_KEY, invalid);
+    expect(() => render(<PreferencesHarness />)).not.toThrow();
+    expect(screen.getByRole("button", { name: DEFAULT_PREFERENCES.skin })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain(PREFERENCES_STORAGE_KEY);
+    expect(localStorage.getItem(PREFERENCES_STORAGE_KEY)).toBe(invalid);
+  });
+
+  it("preserves corrupted legacy preferences and exposes the error", () => {
+    const corrupted = "not-json";
+    localStorage.setItem(LEGACY_PREFERENCES_STORAGE_KEY, corrupted);
+    expect(() => render(<PreferencesHarness />)).not.toThrow();
+    expect(screen.getByRole("button", { name: DEFAULT_PREFERENCES.skin })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("原数据已保留");
+    expect(localStorage.getItem(LEGACY_PREFERENCES_STORAGE_KEY)).toBe(corrupted);
+  });
+
+  it("still persists new preferences after recovering from corrupted storage", async () => {
+    localStorage.setItem(PREFERENCES_STORAGE_KEY, "{corrupted json");
+    const user = userEvent.setup();
+    render(<PreferencesHarness />);
+    await user.click(screen.getByRole("button", { name: DEFAULT_PREFERENCES.skin }));
+    expect(JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? "null").skin).toBe("chenxi");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps the in-memory preference unchanged and reports a storage write failure", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota denied"); });
+    const user = userEvent.setup();
+    render(<PreferencesHarness />);
+
+    await user.click(screen.getByRole("button", { name: DEFAULT_PREFERENCES.skin }));
+
+    expect(screen.getByRole("button", { name: DEFAULT_PREFERENCES.skin })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("quota denied");
   });
 });

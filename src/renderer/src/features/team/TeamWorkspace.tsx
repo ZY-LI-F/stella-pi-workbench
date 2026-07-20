@@ -48,9 +48,9 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
   }, [board, project, query]);
 
   useEffect(() => {
-    if (selectedChannelId === TEAM_LAUNCH_ROOM_ID || tasks.some((task) => task.id === selectedChannelId)) return;
+    if (selectedChannelId === TEAM_LAUNCH_ROOM_ID || !board || board.tasks.some((task) => task.id === selectedChannelId)) return;
     setSelectedChannelId(TEAM_LAUNCH_ROOM_ID);
-  }, [selectedChannelId, tasks]);
+  }, [board, selectedChannelId]);
 
   useEffect(() => setMentionRequest(undefined), [selectedChannelId]);
 
@@ -123,6 +123,7 @@ export function TeamWorkspace({ api, controller, project, executionEnabled, onOp
 
         <section className="team-conversation" aria-label="团队对话">
           {selectedTask ? <TaskDetailPanel
+            key={selectedTask.id}
             variant="workspace"
             task={selectedTask}
             catalog={catalog}

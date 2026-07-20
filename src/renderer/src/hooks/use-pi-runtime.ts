@@ -19,12 +19,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export class ReportedRuntimeError extends Error {
+  constructor(cause: unknown) {
+    super(errorMessage(cause), { cause });
+    this.name = "ReportedRuntimeError";
+  }
+}
+
+export function isReportedRuntimeError(error: unknown): error is ReportedRuntimeError {
+  return error instanceof ReportedRuntimeError;
+}
+
 export interface PiRuntimeController {
   readonly state: RuntimeUiState;
   command(command: PiCommand, refreshAfter?: boolean): Promise<PiResponse>;
   refresh(): Promise<RuntimeBootstrap>;
   chooseProject(): ReturnType<StellaDesktopApi["chooseProject"]>;
-  openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap>;
+  openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap | null>;
   openTaskSession(input: OpenTaskSessionInput): Promise<RuntimeBootstrap>;
   respondToExtension(response: PiExtensionResponse): Promise<void>;
   expireExtensionRequest(id: string): void;
@@ -93,12 +104,14 @@ export function usePiRuntime(api: StellaDesktopApi): PiRuntimeController {
     async (piCommand: PiCommand, refreshAfter = false) => {
       try {
         const response = await api.command(piCommand);
+        // success:false 与传输失败同样记录为可见通知；调用方仍负责处理命令后的本地步骤。
+        if (!response.success) throw new Error(response.error);
         if (refreshAfter) await refresh();
         return response;
       } catch (error) {
         const message = errorMessage(error);
         dispatch({ type: "SYNC_FAILED", error: message });
-        throw error;
+        throw new ReportedRuntimeError(error);
       }
     },
     [api, refresh],
@@ -108,11 +121,12 @@ export function usePiRuntime(api: StellaDesktopApi): PiRuntimeController {
     async (path: string, trusted: boolean) => {
       try {
         const bootstrap = await api.openProject(path, trusted);
+        if (!bootstrap) return null;
         dispatch({ type: "BOOTSTRAP", payload: bootstrap });
         return bootstrap;
       } catch (error) {
         dispatch({ type: "SYNC_FAILED", error: errorMessage(error) });
-        throw error;
+        throw new ReportedRuntimeError(error);
       }
     },
     [api],
@@ -126,7 +140,7 @@ export function usePiRuntime(api: StellaDesktopApi): PiRuntimeController {
         return bootstrap;
       } catch (error) {
         dispatch({ type: "SYNC_FAILED", error: errorMessage(error) });
-        throw error;
+        throw new ReportedRuntimeError(error);
       }
     },
     [api],

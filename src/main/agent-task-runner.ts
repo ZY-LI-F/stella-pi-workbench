@@ -4,7 +4,7 @@ import { backgroundSessionName } from "../shared/session-policy";
 import type { PiRuntimeStartOptions } from "./pi-rpc-runtime";
 import { resolveAgentRuntimeModel, type RuntimeModelSelection } from "../shared/runtime-model";
 import { assertRequiredAgentSkills, requiredSkillsPrompt } from "./required-agent-skills";
-import { AgentTaskService, type ClaimedAgentTask } from "./agent-task-service";
+import { AgentTaskRuntimeExpiredError, AgentTaskService, type ClaimedAgentTask } from "./agent-task-service";
 import {
   WorkspaceAdmission,
   WorkspaceAdmissionAbortError,
@@ -33,6 +33,7 @@ interface AgentTaskRunnerDependencies {
   readonly emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly admission: WorkspaceAdmission;
   readonly globalModel: () => RuntimeModelSelection | undefined;
+  readonly resolveProjectPath: (projectPath: string, trusted: boolean) => Promise<string>;
 }
 
 interface ActiveExecution {
@@ -80,6 +81,7 @@ export class AgentTaskRunner {
   readonly #emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly #admission: WorkspaceAdmission;
   readonly #globalModel: () => RuntimeModelSelection | undefined;
+  readonly #resolveProjectPath: (projectPath: string, trusted: boolean) => Promise<string>;
   #active?: ActiveExecution;
   #waiting?: WaitingExecution;
   #drainPromise?: Promise<void>;
@@ -92,13 +94,14 @@ export class AgentTaskRunner {
     this.#emitBoardEvent = dependencies.emitBoardEvent;
     this.#admission = dependencies.admission;
     this.#globalModel = dependencies.globalModel;
+    this.#resolveProjectPath = dependencies.resolveProjectPath;
   }
 
   start(): void {
     this.#stopping = false;
     void this.#service.reconcileWaitingParents()
-      .then(() => this.notify())
-      .catch((error) => this.#reportError(error));
+      .catch((error) => this.#reportError(error))
+      .then(() => this.notify());
   }
 
   notify(): void {
@@ -132,7 +135,11 @@ export class AgentTaskRunner {
     await this.#drainPromise;
     const active = this.#active;
     if (!active) return;
-    await this.#service.interruptRunning(active.agentTaskId, active.runtimeToken, "Stella 关闭，Agent 执行已中断");
+    try {
+      await this.#service.interruptRunning(active.agentTaskId, active.runtimeToken, "Stella 关闭，Agent 执行已中断");
+    } catch (cause) {
+      if (!(cause instanceof AgentTaskRuntimeExpiredError)) throw cause;
+    }
     this.#active = undefined;
     try {
       await active.runtime.abortAndStop();
@@ -217,8 +224,9 @@ export class AgentTaskRunner {
     const agent = claimed.agentTask.agentSnapshot;
     const selectedModel = resolveAgentRuntimeModel(agent, this.#globalModel());
     try {
+      const projectPath = await this.#resolveProjectPath(claimed.task.projectPath, claimed.task.trusted);
       await runtime.start({
-        cwd: claimed.task.projectPath,
+        cwd: projectPath,
         trusted: claimed.task.trusted,
         sessionName: backgroundSessionName({
           taskId: claimed.task.id,

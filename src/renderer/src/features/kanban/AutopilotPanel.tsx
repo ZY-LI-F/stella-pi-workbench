@@ -9,6 +9,7 @@ import {
   type AutopilotTrigger,
   type CreateAutopilotInput,
   type ExecutionTarget,
+  type KanbanTask,
   type OrchestrationCatalog,
   type Squad,
   type TaskPriority,
@@ -19,6 +20,7 @@ interface AutopilotPanelProps {
   readonly project: ProjectMeta;
   readonly catalog: OrchestrationCatalog;
   readonly squads: readonly Squad[];
+  readonly tasks: readonly KanbanTask[];
   readonly autopilots: readonly Autopilot[];
   readonly runs: readonly AutopilotRun[];
   readonly webhookStatus?: AutomationRuntimeStatus["webhook"];
@@ -123,6 +125,7 @@ export function AutopilotPanel({
   project,
   catalog,
   squads,
+  tasks,
   autopilots,
   runs,
   webhookStatus,
@@ -140,18 +143,21 @@ export function AutopilotPanel({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // 仅在切换选择或所选规则真正更新时重置草稿，避免看板快照抹掉输入。
+  const selectedUpdatedAt = selected?.updatedAt;
   useEffect(() => {
-    const next = selectedId === "new" ? undefined : autopilots.find((autopilot) => autopilot.id === selectedId);
-    setDraft(next ? draftFromAutopilot(next) : emptyDraft(catalog));
+    setDraft(selected ? draftFromAutopilot(selected) : emptyDraft(catalog));
     setError("");
     setConfirmDelete(false);
     setCopied(false);
-  }, [autopilots, catalog, selectedId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只依赖选择标识与 updatedAt：看板快照的身份抖动不应抹掉用户草稿
+  }, [selectedId, selectedUpdatedAt]);
 
   const selectedRuns = useMemo(
     () => selected ? runs.filter((run) => run.autopilotId === selected.id) : [],
     [runs, selected],
   );
+  const taskIds = useMemo(() => new Set(tasks.map((task) => task.id)), [tasks]);
 
   const update = <K extends keyof AutopilotDraft>(key: K, value: AutopilotDraft[K]) => {
     setDraft((current) => Object.freeze({ ...current, [key]: value }));
@@ -323,7 +329,7 @@ export function AutopilotPanel({
               {selectedRuns.slice(0, 8).map((run) => (
                 <article className={`is-${run.status}`} key={run.id}>
                   <span>{runLabel(run.status)}</span>
-                  <div><strong>{new Date(run.startedAt).toLocaleString()}</strong><small>{run.taskId ? `Task ${run.taskId}` : "未生成任务"}</small>{run.error && <p>{run.error}</p>}</div>
+                  <div><strong>{new Date(run.startedAt).toLocaleString()}</strong><small title={run.taskId}>{run.taskId ? (taskIds.has(run.taskId) ? `Task ${run.taskId}` : "任务已删除") : "未生成任务"}</small>{run.error && <p>{run.error}</p>}</div>
                 </article>
               ))}
               {selectedRuns.length === 0 && <p className="autopilot-audit__empty">尚未触发。保存后点击“运行一次”即可生成第一条审计记录。</p>}

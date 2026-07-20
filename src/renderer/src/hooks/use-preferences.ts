@@ -48,27 +48,82 @@ function isLegacyPreferences(value: unknown): value is LegacyPreferences {
   );
 }
 
+interface LoadedPreferences {
+  readonly preferences: Preferences;
+  readonly storageError?: string;
+}
+
+function storageFailure(action: string, cause: unknown): string {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  return `${action}：${detail}`;
+}
+
 export function parsePreferences(raw: string, storageKey = PREFERENCES_STORAGE_KEY): Preferences {
   const parsed = JSON.parse(raw) as unknown;
   if (!isPreferences(parsed)) throw new Error(`本地偏好 ${storageKey} 格式无效`);
   return Object.freeze({ ...parsed });
 }
 
-function loadPreferences(): Preferences {
-  const stored = localStorage.getItem(PREFERENCES_STORAGE_KEY);
-  if (stored) return parsePreferences(stored);
+function loadPreferences(): LoadedPreferences {
+  let stored: string | null;
+  try {
+    stored = localStorage.getItem(PREFERENCES_STORAGE_KEY);
+  } catch (cause) {
+    return Object.freeze({
+      preferences: DEFAULT_PREFERENCES,
+      storageError: storageFailure("无法读取本地偏好，当前页面暂用默认值", cause),
+    });
+  }
 
-  const legacyStored = localStorage.getItem(LEGACY_PREFERENCES_STORAGE_KEY);
-  if (!legacyStored) return DEFAULT_PREFERENCES;
-  const legacy = JSON.parse(legacyStored) as unknown;
-  if (!isLegacyPreferences(legacy)) throw new Error(`本地偏好 ${LEGACY_PREFERENCES_STORAGE_KEY} 格式无效`);
-  const migrated = Object.freeze({ ...legacy, skin: "stella" as const });
-  localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(migrated));
-  return migrated;
+  if (stored !== null) {
+    try {
+      return Object.freeze({ preferences: parsePreferences(stored) });
+    } catch (cause) {
+      return Object.freeze({
+        preferences: DEFAULT_PREFERENCES,
+        storageError: storageFailure(`本地偏好 ${PREFERENCES_STORAGE_KEY} 已损坏，原数据已保留`, cause),
+      });
+    }
+  }
+
+  let legacyStored: string | null;
+  try {
+    legacyStored = localStorage.getItem(LEGACY_PREFERENCES_STORAGE_KEY);
+  } catch (cause) {
+    return Object.freeze({
+      preferences: DEFAULT_PREFERENCES,
+      storageError: storageFailure("无法读取旧版本地偏好，当前页面暂用默认值", cause),
+    });
+  }
+  if (legacyStored === null) return Object.freeze({ preferences: DEFAULT_PREFERENCES });
+
+  let migrated: Preferences;
+  try {
+    const legacy = JSON.parse(legacyStored) as unknown;
+    if (!isLegacyPreferences(legacy)) throw new Error(`本地偏好 ${LEGACY_PREFERENCES_STORAGE_KEY} 格式无效`);
+    migrated = Object.freeze({ ...legacy, skin: "stella" as const });
+  } catch (cause) {
+    return Object.freeze({
+      preferences: DEFAULT_PREFERENCES,
+      storageError: storageFailure(`旧版本地偏好 ${LEGACY_PREFERENCES_STORAGE_KEY} 已损坏，原数据已保留`, cause),
+    });
+  }
+
+  try {
+    localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(migrated));
+    return Object.freeze({ preferences: migrated });
+  } catch (cause) {
+    return Object.freeze({
+      preferences: migrated,
+      storageError: storageFailure(`旧版偏好已读取，但无法写入 ${PREFERENCES_STORAGE_KEY}`, cause),
+    });
+  }
 }
 
-export function usePreferences(): readonly [Preferences, (next: Preferences) => void] {
-  const [preferences, setPreferencesState] = useState<Preferences>(loadPreferences);
+export function usePreferences(): readonly [Preferences, (next: Preferences) => void, string | undefined] {
+  const [loaded] = useState<LoadedPreferences>(loadPreferences);
+  const [preferences, setPreferencesState] = useState<Preferences>(loaded.preferences);
+  const [storageError, setStorageError] = useState<string | undefined>(loaded.storageError);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -85,9 +140,15 @@ export function usePreferences(): readonly [Preferences, (next: Preferences) => 
 
   const setPreferences = (next: Preferences) => {
     const frozen = Object.freeze({ ...next });
-    localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(frozen));
+    try {
+      localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(frozen));
+    } catch (cause) {
+      setStorageError(storageFailure(`无法写入本地偏好 ${PREFERENCES_STORAGE_KEY}`, cause));
+      return;
+    }
     setPreferencesState(frozen);
+    setStorageError(undefined);
   };
 
-  return [preferences, setPreferences] as const;
+  return [preferences, setPreferences, storageError] as const;
 }

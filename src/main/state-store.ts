@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { RecentProject } from "../shared/contracts";
@@ -47,6 +48,7 @@ function parseState(contents: string, path: string): PersistedState {
 
 export class StateStore {
   readonly #path: string;
+  #writeQueue: Promise<void> = Promise.resolve();
 
   constructor(path: string) {
     this.#path = path;
@@ -61,21 +63,25 @@ export class StateStore {
     }
   }
 
-  async recordProject(path: string, trusted: boolean): Promise<PersistedState> {
-    const current = await this.read();
-    const opened: RecentProject = Object.freeze({ path, trusted, lastOpened: new Date().toISOString() });
-    const recentProjects = Object.freeze([
-      opened,
-      ...current.recentProjects.filter((project) => project.path !== path),
-    ].slice(0, 12));
-    const next: PersistedState = Object.freeze({ lastProject: path, recentProjects });
-    await this.#write(next);
-    return next;
+  recordProject(path: string, trusted: boolean): Promise<PersistedState> {
+    const operation = this.#writeQueue.then(async () => {
+      const current = await this.read();
+      const opened: RecentProject = Object.freeze({ path, trusted, lastOpened: new Date().toISOString() });
+      const recentProjects = Object.freeze([
+        opened,
+        ...current.recentProjects.filter((project) => project.path !== path),
+      ].slice(0, 12));
+      const next: PersistedState = Object.freeze({ lastProject: path, recentProjects });
+      await this.#write(next);
+      return next;
+    });
+    this.#writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   async #write(state: PersistedState): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    const tempPath = `${this.#path}.tmp`;
+    const tempPath = `${this.#path}.${randomUUID()}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
     await rename(tempPath, this.#path);
   }

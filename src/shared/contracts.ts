@@ -208,7 +208,7 @@ export interface StellaDesktopApi {
   skinArtworkInitialize(): Promise<readonly SkinArtworkDescriptor[]>;
   chooseSkinArtwork(skin: SkinId): Promise<SkinArtworkDescriptor | null>;
   resetSkinArtwork(skin: SkinId): Promise<void>;
-  openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap>;
+  openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap | null>;
   revealPath(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   copyText(value: string): Promise<void>;

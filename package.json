@@ -25,6 +25,7 @@
     "dist:mac:arm64": "npm run build && electron-builder --config electron-builder.config.mjs --mac dmg zip --arm64 --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint src/renderer",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -32,7 +33,7 @@
     "test:e2e:pharma:live": "npm run build && playwright test --config playwright.live.config.ts",
     "test:packaged": "playwright test tests/e2e/packaged.spec.ts",
     "release:checksums": "node scripts/write-release-checksums.mjs",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.80.10",
@@ -55,8 +56,11 @@
     "electron": "43.1.1",
     "electron-builder": "26.15.3",
     "electron-vite": "5.0.0",
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "29.1.1",
     "typescript": "5.9.3",
+    "typescript-eslint": "^8.64.0",
     "vite": "7.3.6",
     "vitest": "4.1.10"
   }

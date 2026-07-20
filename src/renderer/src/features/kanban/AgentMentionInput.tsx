@@ -82,10 +82,12 @@ export function AgentMentionInput({
   useEffect(() => {
     const first = selectableIndices[0] ?? 0;
     setActiveIndex(first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只跟踪 length：数组身份每次渲染变化，跟踪引用会重置用户键盘导航的高亮
   }, [queryKey, selectableIndices.length]);
 
   useEffect(() => {
     onQueryChange?.(pickerOpen ? activeQuery : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 按字段跟踪 activeQuery，避免 useMemo 身份抖动触发重复回调
   }, [activeQuery?.end, activeQuery?.query, activeQuery?.start, onQueryChange, pickerOpen]);
 
   useEffect(() => {
@@ -135,6 +137,7 @@ export function AgentMentionInput({
     setDismissedQuery("");
     onChange(next.value);
     focusAt(next.caret);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mention 请求按 requestId 一次性消费，其余值取请求时刻的快照
   }, [mentionRequest?.requestId]);
 
   const moveActive = (direction: 1 | -1): void => {

@@ -14,7 +14,7 @@ import {
 import type { ProjectMeta, StellaDesktopApi } from "@shared/contracts";
 import { deriveAgentPresences } from "@shared/agent-presence";
 import {
-  boardLaneForStage,
+  MANUAL_TASK_STAGES,
   type BoardLane,
   type KanbanTask,
   type ManualTaskStage,
@@ -42,13 +42,14 @@ interface KanbanWorkspaceProps {
   readonly onRetryTaskCapability: () => void;
   readonly createRequest: number;
   readonly createDraft?: PiTaskDraft;
+  readonly onCreateRequestConsumed: () => void;
   readonly onContinueTaskSession: (taskId: string, sessionPath: string) => Promise<void>;
   readonly onOpenSidebar: () => void;
   readonly onOpenTerminal: () => void;
   readonly onError: (message: string) => void;
 }
 
-const MANUAL_LANES = new Set<BoardLane>(["planned", "blocked", "completed"]);
+const MANUAL_LANES = new Set<BoardLane>(MANUAL_TASK_STAGES);
 const PRIORITY_ORDER: Readonly<Record<KanbanTask["priority"], number>> = Object.freeze({
   urgent: 0,
   high: 1,
@@ -78,6 +79,7 @@ export function KanbanWorkspace({
   onRetryTaskCapability,
   createRequest,
   createDraft,
+  onCreateRequestConsumed,
   onContinueTaskSession,
   onOpenSidebar,
   onOpenTerminal,
@@ -93,11 +95,14 @@ export function KanbanWorkspace({
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [automationOpen, setAutomationOpen] = useState(false);
 
+  // 打开编辑器后立即消费请求计数，避免 project 变化或组件重挂载时重新弹出幽灵对话框。
   useEffect(() => {
     if (createRequest > 0 && project) {
+      onCreateRequestConsumed();
       setNewTaskDraft(createDraft);
       setEditorTaskId("new");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- createRequest 一次性消费；onCreateRequestConsumed 是父级内联回调，加入依赖会导致每次渲染重复消费
   }, [createDraft, createRequest, project]);
 
   useEffect(() => {
@@ -220,7 +225,7 @@ export function KanbanWorkspace({
       <div className="kanban-stage">
         <div className="kanban-board" aria-label="任务看板">
           {LANE_CONFIG.map((lane) => {
-            const tasks = visibleTasks.filter((task) => boardLaneForStage(task.stage) === lane.id);
+            const tasks = visibleTasks.filter((task) => task.stage === lane.id);
             return (
               <section
                 className={`kanban-lane kanban-lane--${lane.id} ${MANUAL_LANES.has(lane.id) ? "is-droppable" : ""}`}
@@ -271,6 +276,7 @@ export function KanbanWorkspace({
 
         {selectedTask && (
           <TaskDetailPanel
+            key={selectedTask.id}
             task={selectedTask}
             catalog={catalog}
             squads={board.squads}
@@ -334,6 +340,7 @@ export function KanbanWorkspace({
           })}
           project={project}
           squads={board.squads}
+          tasks={board.tasks}
           autopilots={board.autopilots}
           autopilotRuns={board.autopilotRuns}
           webhookStatus={state.automationRuntime?.webhook}

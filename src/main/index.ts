@@ -1,4 +1,5 @@
 import { copyFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
@@ -31,6 +32,8 @@ import type {
 } from "../shared/contracts";
 import { CAPABILITY_NAMES, type CapabilityHealthSnapshot, type CapabilityName } from "../shared/capabilities";
 import {
+  AGENT_THINKING_LEVELS,
+  MANUAL_TASK_STAGES,
   TASK_PRIORITIES,
   type BoardBootstrap,
   type CreateAutopilotInput,
@@ -70,6 +73,12 @@ import { visibleInteractiveSessions } from "../shared/session-policy";
 import { resolveTaskSessionTarget } from "../shared/task-session-bridge";
 import { isSkinId, type SkinArtworkDescriptor, type SkinId } from "../shared/skin-artwork";
 import { SkinArtworkService, type StoredSkinArtwork } from "./skin-artwork-service";
+import {
+  canonicalExecutionProjectPath,
+  canonicalExistingPath,
+  canonicalPathWithinRoots,
+  pathComparisonKey,
+} from "./path-security";
 
 const rpcEntryPath = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"));
 const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
@@ -119,7 +128,7 @@ const PI_COMMAND_TYPES = new Set<string>([
 ]);
 
 function requiredString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${label} 必须是非空字符串`);
+  if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} 必须是非空字符串`);
   return value;
 }
 
@@ -315,10 +324,10 @@ function validatedUpdateTask(value: unknown): UpdateTaskInput {
 }
 
 function validatedManualStage(value: unknown): ManualTaskStage {
-  if (value !== "planned" && value !== "blocked" && value !== "completed") {
+  if (typeof value !== "string" || !MANUAL_TASK_STAGES.includes(value as ManualTaskStage)) {
     throw new Error(`不支持的手动任务阶段: ${String(value)}`);
   }
-  return value;
+  return value as ManualTaskStage;
 }
 
 function validatedGate(value: unknown): ResolveGateInput {
@@ -365,7 +374,7 @@ function validatedProjectAgent(value: unknown): CreateProjectAgentInput {
   const input = objectValue(value, "自定义 Agent 参数");
   if (input.workspaceAccess !== "read" && input.workspaceAccess !== "write") throw new Error("workspaceAccess 必须是 read 或 write");
   const thinking = textValue(input.thinking, "thinking");
-  if (!["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) throw new Error(`不支持的 thinking: ${thinking}`);
+  if (!AGENT_THINKING_LEVELS.includes(thinking as CreateProjectAgentInput["thinking"])) throw new Error(`不支持的 thinking: ${thinking}`);
   return Object.freeze({
     name: textValue(input.name, "name"),
     callsign: textValue(input.callsign, "callsign"),
@@ -440,10 +449,13 @@ function validatedCreateAutopilotTrigger(value: unknown): CreateAutopilotInput["
   if (trigger.kind === "manual") return Object.freeze({ kind: "manual" });
   if (trigger.kind === "webhook") return Object.freeze({ kind: "webhook" });
   if (trigger.kind === "schedule") {
-    if (!Number.isInteger(trigger.intervalMinutes)) throw new Error("trigger.intervalMinutes 必须是整数");
+    const intervalMinutes = trigger.intervalMinutes;
+    if (typeof intervalMinutes !== "number" || !Number.isInteger(intervalMinutes) || intervalMinutes <= 0) {
+      throw new Error("trigger.intervalMinutes 必须是正整数");
+    }
     return Object.freeze({
       kind: "schedule",
-      intervalMinutes: trigger.intervalMinutes as number,
+      intervalMinutes,
       nextRunAt: textValue(trigger.nextRunAt, "trigger.nextRunAt"),
     });
   }
@@ -755,9 +767,13 @@ async function initializeRuntime(): Promise<RuntimeBootstrap> {
   try {
     if (!currentProject) {
       const persisted = await stateStore.read();
-      const cwd = persisted.lastProject ?? (app.isPackaged ? app.getPath("documents") : process.cwd());
-      const remembered = persisted.recentProjects.find((project) => project.path === cwd);
-      currentProject = Object.freeze({ cwd, trusted: remembered?.trusted ?? false });
+      const requestedPath = resolve(persisted.lastProject ?? (app.isPackaged ? app.getPath("documents") : process.cwd()));
+      const cwd = await canonicalProjectDirectory(requestedPath);
+      const remembered = persisted.recentProjects.find(
+        (project) => canonicalSessionPath(project.path) === canonicalSessionPath(requestedPath),
+      );
+      const identityUnchanged = canonicalSessionPath(requestedPath) === canonicalSessionPath(cwd);
+      currentProject = Object.freeze({ cwd, trusted: identityUnchanged && (remembered?.trusted ?? false) });
     }
     const bootstrap = await hydrate();
     capabilityHealth.set("pi", "ready");
@@ -825,8 +841,9 @@ async function chooseProject(): Promise<ProjectSelection | null> {
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options);
-  const path = result.filePaths[0];
-  if (result.canceled || !path) return null;
+  const selectedPath = result.filePaths[0];
+  if (result.canceled || !selectedPath) return null;
+  const path = await canonicalProjectDirectory(selectedPath);
   return Object.freeze({
     path,
     name: basename(path) || path,
@@ -834,12 +851,33 @@ async function chooseProject(): Promise<ProjectSelection | null> {
   });
 }
 
+async function confirmTrustEscalation(resolvedPath: string): Promise<boolean | null> {
+  const persisted = await stateStore.read();
+  const remembered = persisted.recentProjects.find(
+    (project) => canonicalSessionPath(project.path) === canonicalSessionPath(resolvedPath),
+  );
+  if (remembered?.trusted) return true;
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error("无法显示项目信任确认窗口，已拒绝信任模式启动");
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: "warning",
+    title: "确认信任项目",
+    message: "以信任模式打开该项目？",
+    detail: `${resolvedPath}\n\n信任模式会让 Pi 以 --approve 运行，自动执行该项目内的命令与扩展。请仅对来源可信的项目启用。`,
+    buttons: ["取消", "以受限模式打开", "信任并打开"],
+    defaultId: 1,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response === 0) return null;
+  return response === 2;
+}
+
 async function openProject(path: string, trusted: boolean): Promise<RuntimeBootstrap> {
+  const resolvedPath = await canonicalProjectDirectory(path);
   capabilityHealth.set("pi", "loading");
   try {
     await runtime.stop();
     interactiveCommandRouter?.release();
-    const resolvedPath = resolve(path);
     currentProject = Object.freeze({ cwd: resolvedPath, trusted });
     await runtime.start(currentProject);
     await stateStore.recordProject(resolvedPath, trusted);
@@ -853,8 +891,26 @@ async function openProject(path: string, trusted: boolean): Promise<RuntimeBoots
 }
 
 function canonicalSessionPath(path: string): string {
-  const resolvedPath = resolve(path);
-  return process.platform === "win32" ? resolvedPath.toLocaleLowerCase() : resolvedPath;
+  return pathComparisonKey(path);
+}
+
+async function canonicalProjectDirectory(path: string): Promise<string> {
+  const canonical = await canonicalExistingPath(path);
+  const metadata = await stat(canonical);
+  if (!metadata.isDirectory()) throw new Error(`项目路径不是目录: ${canonical}`);
+  return canonical;
+}
+
+function piAgentDir(): string {
+  const override = process.env.PI_CODING_AGENT_DIR;
+  if (override) return resolve(override.replace(/^~(?=$|[\\/])/, homedir()));
+  return join(homedir(), ".pi", "agent");
+}
+
+function allowedRevealRoots(): readonly string[] {
+  const roots = [piAgentDir(), app.getPath("userData"), tmpdir()];
+  if (currentProject) roots.push(currentProject.cwd);
+  return Object.freeze(roots);
 }
 
 async function openTaskSession(value: unknown): Promise<RuntimeBootstrap> {
@@ -862,14 +918,19 @@ async function openTaskSession(value: unknown): Promise<RuntimeBootstrap> {
   assertPiExecutionCapability();
   const state = await boardStore.read();
   const target = resolveTaskSessionTarget(state, validatedOpenTaskSession(value), canonicalSessionPath);
-  const session = await stat(target.sessionPath);
-  if (!session.isFile()) throw new Error(`任务 session 不是文件: ${target.sessionPath}`);
+  const requestedProjectPath = resolve(target.projectPath);
+  const projectPath = await canonicalExecutionProjectPath(requestedProjectPath, target.trusted);
+  const project = await stat(projectPath);
+  if (!project.isDirectory()) throw new Error(`任务项目路径不是目录: ${projectPath}`);
+  const sessionPath = await canonicalExistingPath(target.sessionPath);
+  const session = await stat(sessionPath);
+  if (!session.isFile()) throw new Error(`任务 session 不是文件: ${sessionPath}`);
   capabilityHealth.set("pi", "loading");
   try {
     await runtime.stop();
     interactiveCommandRouter?.release();
-    currentProject = Object.freeze({ cwd: resolve(target.projectPath), trusted: target.trusted });
-    await runtime.start({ ...currentProject, sessionPath: target.sessionPath });
+    currentProject = Object.freeze({ cwd: projectPath, trusted: target.trusted });
+    await runtime.start({ ...currentProject, sessionPath });
     await stateStore.recordProject(currentProject.cwd, currentProject.trusted);
     const bootstrap = await hydrate();
     capabilityHealth.set("pi", "ready");
@@ -934,6 +995,7 @@ async function initializeTaskCapability(): Promise<void> {
       emitBoardEvent: (event) => broadcast("board", event),
       admission: workspaceAdmission,
       globalModel: () => globalModelSelection,
+      resolveProjectPath: canonicalExecutionProjectPath,
     });
     agentTaskService = new AgentTaskService({
       repository: boardStore,
@@ -973,6 +1035,7 @@ async function initializeTaskCapability(): Promise<void> {
       emitBoardEvent: (event) => broadcast("board", event),
       admission: workspaceAdmission,
       globalModel: () => globalModelSelection,
+      resolveProjectPath: canonicalExecutionProjectPath,
     });
     agentTaskRunner.start();
     capabilityHealth.set("task", "ready");
@@ -1023,19 +1086,31 @@ function registerIpcHandlers(): void {
   ipcMain.handle("stella:skin-artwork:reset", async (_event, skin: unknown) => {
     await skinArtworkService.reset(validatedSkinId(skin));
   });
-  ipcMain.handle("stella:open-project", (_event, path: unknown, trusted: unknown) => {
+  ipcMain.handle("stella:open-project", async (_event, path: unknown, trusted: unknown) => {
     if (typeof trusted !== "boolean") throw new Error("项目 trusted 参数必须是布尔值");
-    return openProject(requiredString(path, "项目路径"), trusted);
+    const projectPath = await canonicalProjectDirectory(requiredString(path, "项目路径"));
+    const trustDecision = trusted ? await confirmTrustEscalation(projectPath) : false;
+    if (trustDecision === null) return null;
+    const grantTrust = trustDecision;
+    return openProject(projectPath, grantTrust);
   });
   ipcMain.handle("stella:reveal-path", async (_event, path: unknown) => {
-    const validatedPath = requiredString(path, "待显示路径");
-    const target = await stat(validatedPath);
+    const requestedPath = requiredString(path, "待显示路径");
+    const resolvedPath = resolve(requestedPath);
+    if (/^[\\/]{2}/.test(requestedPath) || /^[\\/]{2}/.test(resolvedPath)) {
+      throw new Error(`不允许显示网络（UNC）路径: ${requestedPath}`);
+    }
+    const canonicalPath = await canonicalPathWithinRoots(resolvedPath, allowedRevealRoots());
+    if (!canonicalPath) {
+      throw new Error(`只允许显示当前项目、Pi 数据或应用数据目录内的路径: ${resolvedPath}`);
+    }
+    const target = await stat(canonicalPath);
     if (target.isDirectory()) {
-      const error = await shell.openPath(validatedPath);
+      const error = await shell.openPath(canonicalPath);
       if (error) throw new Error(error);
       return;
     }
-    shell.showItemInFolder(validatedPath);
+    shell.showItemInFolder(canonicalPath);
   });
   ipcMain.handle("stella:open-external", async (_event, url: unknown) => {
     const parsed = new URL(requiredString(url, "外部链接"));
@@ -1141,6 +1216,19 @@ function registerIpcHandlers(): void {
   });
 }
 
+function isAllowedAppNavigation(url: string): boolean {
+  const devServerUrl = process.env.ELECTRON_RENDERER_URL;
+  try {
+    const parsed = new URL(url);
+    if (devServerUrl) return parsed.origin === new URL(devServerUrl).origin;
+    if (parsed.protocol !== "file:") return false;
+    const rendererIndexPath = join(dirname(preloadPath), "../renderer/index.html");
+    return canonicalSessionPath(fileURLToPath(parsed)) === canonicalSessionPath(rendererIndexPath);
+  } catch {
+    return false;
+  }
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1480,
@@ -1167,6 +1255,12 @@ function createWindow(): void {
     const parsed = new URL(url);
     if (parsed.protocol === "https:" || parsed.protocol === "http:") void shell.openExternal(parsed.toString());
     return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isAllowedAppNavigation(url)) event.preventDefault();
+  });
+  mainWindow.webContents.on("will-redirect", (event, url) => {
+    if (!isAllowedAppNavigation(url)) event.preventDefault();
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {

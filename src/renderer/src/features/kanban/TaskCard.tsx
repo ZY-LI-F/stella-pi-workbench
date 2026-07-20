@@ -2,6 +2,8 @@ import type { DragEvent } from "react";
 import { Activity, AlertTriangle, Bot, Clock3, Play, ShieldAlert } from "lucide-react";
 import {
   activeStep,
+  canMoveTaskManually,
+  MANUAL_TASK_STAGES,
   workflowProgress,
   type AgentTask,
   type BoardBridgeEvent,
@@ -44,7 +46,7 @@ export function TaskCard({ task, workflow, executionLabel, run, agentTask, activ
   return (
     <article
       className={`kanban-card priority-${task.priority} status-${task.stage}`}
-      draggable={!task.activeRunId && !task.activeAgentTaskId}
+      draggable={MANUAL_TASK_STAGES.some((stage) => canMoveTaskManually(task, stage))}
       onDragStart={onDragStart}
       data-task-id={task.id}
     >

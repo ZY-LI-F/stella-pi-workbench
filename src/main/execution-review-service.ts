@@ -8,7 +8,7 @@ import type {
   OrchestrationCatalog,
   ReviewExecutionInput,
   TaskActivity,
-  TaskMessage,
+  TaskComment,
   WorkflowRun,
 } from "../shared/kanban";
 import { catalogForBoard } from "../shared/orchestration-catalog";
@@ -55,7 +55,12 @@ export class ExecutionReviewService {
     const now = this.#now();
     const acceptance = decisionStatus(input.decision);
     const board = await this.#repository.update((current) => {
-      if (!current.tasks.some((task) => task.id === input.taskId)) throw new Error(`找不到任务: ${input.taskId}`);
+      const currentTask = current.tasks.find((candidate) => candidate.id === input.taskId);
+      if (!currentTask) throw new Error(`找不到任务: ${input.taskId}`);
+      const activeExecutionId = currentTask.activeRunId ?? currentTask.activeAgentTaskId;
+      if (activeExecutionId && activeExecutionId !== input.executionId) {
+        throw new Error("任务有正在进行的执行，请先中止或等待完成再验收");
+      }
       const result = input.executionKind === "workflow"
         ? this.#reviewWorkflow(current, input, acceptance, comment, now)
         : this.#reviewAgentTask(current, input, acceptance, comment, now);
@@ -70,7 +75,7 @@ export class ExecutionReviewService {
       const provenance = input.executionKind === "workflow"
         ? { runId: input.executionId }
         : { agentTaskId: input.executionId };
-      const message: TaskMessage = Object.freeze({
+      const message: TaskComment = Object.freeze({
         id: this.#id(),
         taskId: input.taskId,
         author: "user",

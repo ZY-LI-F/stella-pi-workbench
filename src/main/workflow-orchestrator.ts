@@ -60,6 +60,7 @@ interface OrchestratorDependencies {
   readonly emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly admission: WorkspaceAdmission;
   readonly globalModel: () => RuntimeModelSelection | undefined;
+  readonly resolveProjectPath: (projectPath: string, trusted: boolean) => Promise<string>;
   readonly now?: () => string;
   readonly id?: () => string;
 }
@@ -122,6 +123,7 @@ export class WorkflowOrchestrator {
   readonly #emitBoardEvent: (event: BoardBridgeEvent) => void;
   readonly #admission: WorkspaceAdmission;
   readonly #globalModel: () => RuntimeModelSelection | undefined;
+  readonly #resolveProjectPath: (projectPath: string, trusted: boolean) => Promise<string>;
   readonly #now: () => string;
   readonly #id: () => string;
   readonly #activeAgents = new Map<string, ActiveAgentRun>();
@@ -135,6 +137,7 @@ export class WorkflowOrchestrator {
     this.#emitBoardEvent = dependencies.emitBoardEvent;
     this.#admission = dependencies.admission;
     this.#globalModel = dependencies.globalModel;
+    this.#resolveProjectPath = dependencies.resolveProjectPath;
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#id = dependencies.id ?? randomUUID;
   }
@@ -182,7 +185,7 @@ export class WorkflowOrchestrator {
         activities: [...current.activities, this.#activity(task.id, "dispatch", `已分发「${workflow.shortName}」`, "等待第一个执行角色", now, run.id)],
       };
     });
-    void this.#advance(runId).catch((error) => this.#failRun(runId, error));
+    void this.#advance(runId).catch((error) => this.#failRun(runId, error)).catch((error) => this.#reportError(error));
     return bootstrap;
   }
 
@@ -249,7 +252,7 @@ export class WorkflowOrchestrator {
         activities: [...current.activities, this.#activity(task.id, "gate", `${step.name}已批准`, comment || undefined, now, run.id, step.stepId)],
       };
     });
-    if (input.decision === "approve") void this.#advance(runId).catch((error) => this.#failRun(runId, error));
+    if (input.decision === "approve") void this.#advance(runId).catch((error) => this.#failRun(runId, error)).catch((error) => this.#reportError(error));
     return bootstrap;
   }
 
@@ -315,10 +318,10 @@ export class WorkflowOrchestrator {
           .filter((run) => activeRunIds.has(run.id) && (run.status === "queued" || run.status === "running"))
           .map((run) => run.id));
         if (interruptedRunIds.size === 0) return current;
-        const activities = [...interruptedRunIds].map((runId) => {
+        const activities = [...interruptedRunIds].flatMap((runId) => {
           const task = tasksByRunId.get(runId);
-          if (!task) throw new Error(`关闭时找不到流程 ${runId} 对应的任务`);
-          return this.#activity(task.id, "error", "应用关闭，流程已中断", "运行进程已在持久化终态后停止。", now, runId);
+          if (!task) return [];
+          return [this.#activity(task.id, "error", "应用关闭，流程已中断", "运行进程已在持久化终态后停止。", now, runId)];
         });
         return {
           ...current,
@@ -417,6 +420,8 @@ export class WorkflowOrchestrator {
     const now = this.#now();
     await this.#commit((current) => {
       const latestRun = this.#run(current, run.id);
+      const latestTask = this.#task(current, task.id);
+      if (latestTask.activeRunId !== run.id || ["blocked", "failed", "interrupted", "reported"].includes(latestRun.status)) return current;
       const waitingStep: StepRun = Object.freeze({ ...step, status: "waiting", startedAt: now });
       return {
         ...current,
@@ -441,6 +446,8 @@ export class WorkflowOrchestrator {
     const now = this.#now();
     await this.#commit((current) => {
       const latestRun = this.#run(current, run.id);
+      const latestTask = this.#task(current, task.id);
+      if (latestTask.activeRunId !== run.id || ["blocked", "failed", "interrupted", "reported"].includes(latestRun.status)) return current;
       return {
         ...current,
         tasks: current.tasks.map((candidate) => candidate.id === task.id
@@ -463,7 +470,7 @@ export class WorkflowOrchestrator {
     lease?: WorkspaceLease,
   ): Promise<void> {
     const runtime = this.#runtimeFactory.create({
-      emitPiEvent: (event) => void this.#handlePiEvent(run.id, event).catch((error) => this.#failRun(run.id, error)),
+      emitPiEvent: (event) => void this.#handlePiEvent(run.id, event).catch((error) => this.#failRun(run.id, error)).catch((error) => this.#reportError(error)),
       emitRuntimeSignal: (signal) => this.#handleRuntimeSignal(run.id, signal),
     });
     const active: ActiveAgentRun = {
@@ -477,16 +484,9 @@ export class WorkflowOrchestrator {
     this.#activeAgents.set(run.id, active);
     const selectedModel = resolveAgentRuntimeModel(agent, this.#globalModel());
     try {
-      if (this.#activeAgents.get(run.id) !== active) {
-        try {
-          await runtime.stop();
-        } finally {
-          active.lease?.release();
-        }
-        return;
-      }
+      const projectPath = await this.#resolveProjectPath(task.projectPath, task.trusted);
       await runtime.start({
-        cwd: task.projectPath,
+        cwd: projectPath,
         trusted: task.trusted,
         sessionName: backgroundSessionName({
           taskId: task.id,
@@ -521,10 +521,12 @@ export class WorkflowOrchestrator {
         return;
       }
       const startedAt = this.#now();
+      let applied = false;
       await this.#commit((current) => {
         const latestRun = this.#run(current, run.id);
         const latestTask = this.#task(current, task.id);
-        if (latestTask.activeRunId !== run.id || ["blocked", "failed", "interrupted", "reported"].includes(latestRun.status)) return current;
+        applied = latestTask.activeRunId === run.id && !["blocked", "failed", "interrupted", "reported"].includes(latestRun.status);
+        if (!applied) return current;
         const runningStep: StepRun = Object.freeze({ ...step, status: "running", startedAt });
         return {
           ...current,
@@ -543,6 +545,15 @@ export class WorkflowOrchestrator {
           activities: [...current.activities, this.#activity(task.id, "agent", `${agent.name}开始执行「${step.name}」`, agent.callsign, startedAt, run.id, step.stepId)],
         };
       });
+      if (!applied) {
+        if (this.#activeAgents.get(run.id) === active) this.#activeAgents.delete(run.id);
+        try {
+          await runtime.stop();
+        } finally {
+          active.lease?.release();
+        }
+        return;
+      }
       await runtime.send({ type: "prompt", message: this.#promptFor(run, task, step, objective, agent) });
     } catch (error) {
       await this.#failRun(run.id, error);
@@ -597,7 +608,7 @@ export class WorkflowOrchestrator {
       message: signal.type === "runtime_stderr" || signal.type === "protocol_error" ? signal.message : undefined,
     });
     if (signal.type === "runtime_exit") {
-      void this.#failRun(runId, new Error(`Pi RPC 意外退出 (code=${String(signal.code)}, signal=${String(signal.signal)})`));
+      void this.#failRun(runId, new Error(`Pi RPC 意外退出 (code=${String(signal.code)}, signal=${String(signal.signal)})`)).catch((error) => this.#reportError(error));
     }
   }
 
@@ -719,11 +730,13 @@ export class WorkflowOrchestrator {
     await this.#commit((current) => {
       const latestRun = this.#run(current, runId);
       const latestTask = this.#task(current, task.id);
+      const failedStepId = latestRun.steps.find((step) => step.stepId === latestRun.currentStepId && step.status === "running")?.stepId
+        ?? latestRun.steps.find((step) => step.status === "running" || step.status === "pending")?.stepId;
       const failedRun: WorkflowRun = Object.freeze({
         ...latestRun,
         status: "failed",
         currentStepId: undefined,
-        steps: Object.freeze(latestRun.steps.map((step) => step.stepId === latestRun.currentStepId && step.status === "running"
+        steps: Object.freeze(latestRun.steps.map((step) => step.stepId === failedStepId
           ? Object.freeze({ ...step, status: "failed" as const, error: message, completedAt: now })
           : step)),
         updatedAt: now,
@@ -739,6 +752,14 @@ export class WorkflowOrchestrator {
         runs: current.runs.map((candidate) => candidate.id === runId ? failedRun : candidate),
         activities: [...current.activities, this.#activity(task.id, "error", "流程执行失败", message, now, runId, latestRun.currentStepId)],
       };
+    });
+  }
+
+  #reportError(cause: unknown): void {
+    this.#emitBoardEvent({
+      type: "automation-error",
+      source: "workflow-orchestrator",
+      message: cause instanceof Error ? cause.message : String(cause),
     });
   }
 

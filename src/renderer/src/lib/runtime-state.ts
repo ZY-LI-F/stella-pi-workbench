@@ -272,6 +272,8 @@ function handleBridgeEvent(state: RuntimeUiState, event: BridgeEvent): RuntimeUi
   if (event.source === "board") return state;
   const payload = event.payload;
   if (payload.type === "runtime_stderr") return { ...state, stderr: `${state.stderr}${payload.message}` };
+  // 运行时重启成功后清除上一次 runtime_exit / protocol_error 留下的错误横幅。
+  if (payload.type === "runtime_ready") return { ...state, error: undefined };
   if (payload.type === "runtime_exit") {
     return {
       ...state,

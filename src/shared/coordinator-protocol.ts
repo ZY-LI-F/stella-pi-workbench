@@ -1,6 +1,7 @@
 import type { AgentDefinition } from "./kanban";
 
-export type CoordinatorActionType = "delegate" | "request_revision" | "replan" | "complete" | "ask_human";
+export const COORDINATOR_ACTION_TYPES = ["delegate", "request_revision", "replan", "complete", "ask_human"] as const;
+export type CoordinatorActionType = (typeof COORDINATOR_ACTION_TYPES)[number];
 
 export interface CoordinatorDelegation {
   readonly agentId: string;
@@ -38,7 +39,7 @@ export function parseCoordinatorAction(output: string, availableAgents: readonly
   const unknownKey = Object.keys(value).find((key) => !allowedKeys.has(key));
   if (unknownKey) throw new Error(`Coordinator action 包含未知字段: ${unknownKey}`);
   const action = requiredString(value.action, "Coordinator action.action") as CoordinatorActionType;
-  if (!["delegate", "request_revision", "replan", "complete", "ask_human"].includes(action)) {
+  if (!COORDINATOR_ACTION_TYPES.includes(action)) {
     throw new Error(`不支持的 Coordinator action: ${action}`);
   }
   const summary = requiredString(value.summary, "Coordinator action.summary");

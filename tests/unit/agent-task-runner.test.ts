@@ -69,6 +69,7 @@ function idFactory(): () => string {
 async function setup(
   runtimeFactory = new FakeAgentRuntimeFactory(),
   globalModel: () => Readonly<{ readonly provider: string; readonly model: string }> | undefined = () => undefined,
+  resolveProjectPath: (projectPath: string, trusted: boolean) => Promise<string> = async (projectPath) => projectPath,
 ) {
   const repository = new MemoryRepository();
   const id = idFactory();
@@ -84,6 +85,7 @@ async function setup(
     emitBoardEvent: (event) => events.push(event),
     admission,
     globalModel,
+    resolveProjectPath,
   });
 
   const createTask = async (title: string, executionTarget: ExecutionTarget = { kind: "agent", agentId: "builder" }) => {
@@ -118,6 +120,21 @@ describe("AgentTaskRunner", () => {
     })));
   });
 
+  it("fails before starting Pi when the saved project path no longer has the same identity", async () => {
+    const runtimeFactory = new FakeAgentRuntimeFactory();
+    const resolveProjectPath = vi.fn(async () => { throw new Error("受信任项目路径的真实位置已变化"); });
+    const { repository, agentTaskService, runner, createTask } = await setup(runtimeFactory, () => undefined, resolveProjectPath);
+    const taskId = await createTask("拒绝重定向项目");
+    await agentTaskService.dispatchDirect(taskId);
+
+    runner.start();
+
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("failed"));
+    expect(resolveProjectPath).toHaveBeenCalledWith("C:/project", true);
+    expect(runtimeFactory.runtimes[0]?.start).not.toHaveBeenCalled();
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
+  });
+
   it("runs direct AgentTasks serially and persists output, stats, comments, and review state", async () => {
     const { repository, agentTaskService, runtimeFactory, runner, createTask } = await setup();
     const firstTaskId = await createTask("第一个任务");
@@ -139,6 +156,34 @@ describe("AgentTaskRunner", () => {
     expect(repository.state.tasks.find((task) => task.id === firstTaskId)?.stage).toBe("review");
     expect(repository.state.comments.some((comment) => comment.taskId === firstTaskId && comment.author === "agent" && comment.body === "真实 Agent 产物")).toBe(true);
     expect(repository.state.agentTasks.find((task) => task.taskId === secondTaskId)?.status).toBe("running");
+  });
+
+  it("treats a typed stale Runtime lease as an idempotent shutdown race", async () => {
+    const { repository, agentTaskService, runtimeFactory, runner, createTask } = await setup();
+    const taskId = await createTask("关闭竞争任务");
+    await agentTaskService.dispatchDirect(taskId);
+    runner.start();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("running"));
+    const running = repository.state.agentTasks.find((task) => task.taskId === taskId);
+    if (!running?.runtimeToken) throw new Error("测试 Runtime 未取得 token");
+
+    await agentTaskService.interruptRunning(running.id, running.runtimeToken, "外部关闭先完成");
+
+    await expect(runner.shutdown()).resolves.toBeUndefined();
+    expect(runtimeFactory.runtimes[0]?.abortAndStop).toHaveBeenCalledOnce();
+  });
+
+  it("does not suppress unrelated shutdown failures whose text mentions Runtime expiry", async () => {
+    const { repository, agentTaskService, runtimeFactory, runner, createTask } = await setup();
+    const taskId = await createTask("关闭错误任务");
+    await agentTaskService.dispatchDirect(taskId);
+    runner.start();
+    await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.taskId === taskId)?.status).toBe("running"));
+    vi.spyOn(agentTaskService, "interruptRunning").mockRejectedValueOnce(new Error("数据库写入失败：Runtime 已失效"));
+
+    await expect(runner.shutdown()).rejects.toThrow("数据库写入失败");
+    expect(runtimeFactory.runtimes[0]?.abortAndStop).not.toHaveBeenCalled();
+    await runtimeFactory.runtimes[0]?.abortAndStop();
   });
 
   it("keeps user abort terminal when a late settlement arrives", async () => {
@@ -448,6 +493,7 @@ describe("AgentTaskRunner", () => {
       emitBoardEvent: () => undefined,
       admission,
       globalModel: () => undefined,
+      resolveProjectPath: async (projectPath) => projectPath,
     });
     recoveredRunner.start();
     await vi.waitFor(() => expect(repository.state.agentTasks.find((task) => task.kind === "squad-leader")?.status).toBe("failed"));

@@ -64,6 +64,16 @@ export interface AbortedAgentTask {
   readonly wasRunning: boolean;
 }
 
+export class AgentTaskRuntimeExpiredError extends Error {
+  readonly agentTaskId: string;
+
+  constructor(agentTaskId: string) {
+    super(`AgentTask ${agentTaskId} 的 Runtime 已失效`);
+    this.name = "AgentTaskRuntimeExpiredError";
+    this.agentTaskId = agentTaskId;
+  }
+}
+
 function cloneAgent(agent: AgentDefinition): AgentDefinition {
   return Object.freeze({
     ...agent,
@@ -275,16 +285,22 @@ export class AgentTaskService {
   }
 
   async nextQueued(): Promise<ClaimedAgentTask | undefined> {
-    const current = await this.#repository.read();
-    if (current.agentTasks.some((agentTask) => agentTask.status === "running")) return undefined;
-    const next = [...current.agentTasks]
-      .filter((agentTask) => agentTask.status === "queued")
-      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))[0];
-    if (!next) return undefined;
-    const task = this.#task(current, next.taskId);
-    const rootId = this.#rootAgentTaskId(current, next);
-    if (task.activeAgentTaskId !== rootId) throw new Error(`AgentTask ${next.id} 与任务的 activeAgentTaskId 不一致`);
-    return Object.freeze({ task, agentTask: next });
+    for (;;) {
+      const current = await this.#repository.read();
+      if (current.agentTasks.some((agentTask) => agentTask.status === "running")) return undefined;
+      const next = [...current.agentTasks]
+        .filter((agentTask) => agentTask.status === "queued")
+        .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.id.localeCompare(right.id))[0];
+      if (!next) return undefined;
+      try {
+        const task = this.#task(current, next.taskId);
+        const rootId = this.#rootAgentTaskId(current, next);
+        if (task.activeAgentTaskId !== rootId) throw new Error(`AgentTask ${next.id} 与任务的 activeAgentTaskId 不一致`);
+        return Object.freeze({ task, agentTask: next });
+      } catch (cause) {
+        await this.rejectQueued(next.id, cause);
+      }
+    }
   }
 
   async claim(agentTaskId: string): Promise<ClaimedAgentTask | undefined> {
@@ -690,7 +706,9 @@ export class AgentTaskService {
 
   #runningAgentTask(state: BoardState, agentTaskId: string, runtimeToken: string): AgentTask {
     const agentTask = this.#agentTask(state, agentTaskId);
-    if (agentTask.status !== "running" || agentTask.runtimeToken !== runtimeToken) throw new Error(`AgentTask ${agentTaskId} 的 Runtime 已失效`);
+    if (agentTask.status !== "running" || agentTask.runtimeToken !== runtimeToken) {
+      throw new AgentTaskRuntimeExpiredError(agentTaskId);
+    }
     return agentTask;
   }
 

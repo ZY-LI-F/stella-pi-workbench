@@ -2537,30 +2537,6 @@
 .button-secondary { border-color: var(--border); background: var(--surface); color: var(--text-soft); }
 .button-secondary:hover { background: var(--surface-hover); color: var(--text); }
 
-.trust-dialog__project {
-  display: flex;
-  margin: 15px 17px 0;
-  padding: 10px 11px;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--accent-warm);
-}
-.trust-dialog__project span { display: flex; min-width: 0; flex-direction: column; }
-.trust-dialog__project strong { color: var(--text-soft); font-size: 11px; }
-.trust-dialog__project small { overflow: hidden; color: var(--text-faint); font-family: var(--font-mono); font-size: 7.5px; text-overflow: ellipsis; white-space: nowrap; }
-.trust-dialog__intro { margin: 13px 19px; color: var(--text-muted); font-size: 10px; line-height: 1.6; }
-.trust-options { display: grid; padding: 0 17px; gap: 7px; }
-.trust-options > button { display: flex; min-height: 68px; padding: 11px; align-items: flex-start; gap: 11px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text-muted); text-align: left; transition: 150ms ease; }
-.trust-options > button:hover { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); background: var(--surface-hover); transform: translateY(-1px); }
-.trust-options__icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 9px; background: var(--surface); color: var(--text-muted); }
-.trust-options__icon--trusted { background: color-mix(in srgb, var(--success) 10%, transparent); color: var(--success); }
-.trust-options > button > span:nth-child(2) { display: flex; flex-direction: column; }
-.trust-options strong { color: var(--text-soft); font-size: 11px; }
-.trust-options small { margin-top: 3px; color: var(--text-faint); font-size: 8.5px; line-height: 1.5; }
-
 .extension-dialog__mark { display: flex; margin: 14px 17px 5px; padding: 9px 10px; align-items: center; gap: 8px; border: 1px solid color-mix(in srgb, var(--accent) 17%, var(--border)); border-radius: 9px; background: var(--accent-soft); color: var(--text-muted); font-size: 9px; }
 .extension-dialog__mark svg { color: var(--accent); }
 .extension-options { display: grid; padding: 11px 17px 0; gap: 6px; }

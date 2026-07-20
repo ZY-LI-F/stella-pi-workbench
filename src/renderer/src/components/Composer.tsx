@@ -91,6 +91,7 @@ export function Composer({
     if (!editorInjection) return;
     onDraftChange(editorInjection.text);
     textareaRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 每条注入只按 id 应用一次；跟踪对象或回调身份会在重渲染时覆盖用户草稿
   }, [editorInjection?.id]);
 
   useEffect(() => {
@@ -181,7 +182,7 @@ export function Composer({
               onChange={(event) => {
                 const files = Array.from(event.target.files ?? []);
                 void Promise.all(files.map(fileToImage))
-                  .then((next) => setImages(Object.freeze([...images, ...next])))
+                  .then((next) => setImages((current) => Object.freeze([...current, ...next])))
                   .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)));
                 event.currentTarget.value = "";
               }}

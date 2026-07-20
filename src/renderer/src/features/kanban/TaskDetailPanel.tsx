@@ -25,6 +25,7 @@ import remarkGfm from "remark-gfm";
 import { availableMentionAgentsForTask, parseAgentMentions } from "@shared/agent-mentions";
 import type { AgentMentionQuery } from "@shared/agent-mentions";
 import type { AgentPresence } from "@shared/agent-presence";
+import { MANUAL_TASK_STAGES } from "@shared/kanban";
 import type {
   AgentTask,
   KanbanTask,
@@ -353,7 +354,7 @@ export function TaskDetailPanel({
       {!executionEnabled && !task.activeRunId && !task.activeAgentTaskId && task.stage !== "completed" && <p className="task-detail__execution-disabled">Pi Runtime 不可用；任务记录仍可编辑，执行入口已暂停。</p>}
       <footer className="task-detail__actions">
         {!task.activeRunId && !task.activeAgentTaskId && task.stage !== "completed" && <button type="button" className="button-primary" disabled={busy || !executionEnabled} onClick={() => void perform(onDispatch)}>{isRedispatch ? <RotateCcw size={14} /> : <Play size={14} />}{isRedispatch ? "重新分发" : "开始执行"}</button>}
-        {(task.activeRunId || activeAgentTask) && <button type="button" className="button-danger-soft" disabled={busy} onClick={() => void perform(onAbort)}><Ban size={14} />中止执行</button>}
+        {(task.activeRunId || task.activeAgentTaskId) && <button type="button" className="button-danger-soft" disabled={busy} onClick={() => void perform(onAbort)}><Ban size={14} />中止执行</button>}
         {!task.activeRunId && !task.activeAgentTaskId && <button type="button" className="button-secondary" disabled={busy} onClick={onEdit}><Pencil size={14} />编辑</button>}
         {!task.activeRunId && !task.activeAgentTaskId && (
           <select aria-label="手动移动任务" value="" disabled={busy} onChange={(event) => {
@@ -361,9 +362,7 @@ export function TaskDetailPanel({
             if (stage) void perform(() => onMove(stage));
           }}>
             <option value="">移动到…</option>
-            <option value="planned">待规划</option>
-            <option value="blocked">受阻</option>
-            <option value="completed">已完成</option>
+            {MANUAL_TASK_STAGES.map((stage) => <option value={stage} key={stage}>{STAGE_LABEL[stage]}</option>)}
           </select>
         )}
         {!task.activeRunId && !task.activeAgentTaskId && (!confirmDelete

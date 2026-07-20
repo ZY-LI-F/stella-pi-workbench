@@ -17,14 +17,14 @@ import {
 import type {
   ModelSummary,
   PiResponse,
-  ProjectSelection,
   RecentProject,
   SessionSummary,
   SlashCommandSummary,
   StellaDesktopApi,
 } from "@shared/contracts";
 import type { SkinArtworkDescriptor, SkinId } from "@shared/skin-artwork";
-import { usePiRuntime } from "./hooks/use-pi-runtime";
+import { AGENT_THINKING_LEVELS, type AgentThinkingLevel } from "@shared/kanban";
+import { isReportedRuntimeError, usePiRuntime } from "./hooks/use-pi-runtime";
 import { useKanban } from "./hooks/use-kanban";
 import { useCapabilities } from "./hooks/use-capabilities";
 import { usePreferences } from "./hooks/use-preferences";
@@ -43,7 +43,6 @@ import { Composer, type ComposerImage } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { ExtensionDialog } from "./components/ExtensionDialog";
 import { Inspector } from "./components/Inspector";
-import { ProjectTrustDialog } from "./components/ProjectTrustDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar, type WorkspaceView } from "./components/Sidebar";
 import { TerminalDrawer, type BashResult } from "./components/TerminalDrawer";
@@ -59,12 +58,14 @@ interface AppProps {
   readonly api: StellaDesktopApi;
 }
 
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
 function responseData(response: PiResponse): unknown {
   if (!response.success) throw new Error(response.error);
   if (!("data" in response)) throw new Error(`命令 ${response.command} 没有返回数据`);
   return response.data;
+}
+
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 function parseBashResult(value: unknown): BashResult {
@@ -140,7 +141,7 @@ export function App({ api }: AppProps) {
   const kanban = useKanban(api);
   const capabilities = useCapabilities(api);
   const { state } = controller;
-  const [preferences, setPreferences] = usePreferences();
+  const [preferences, setPreferences, preferencesStorageError] = usePreferences();
   const skinArtwork = useSkinArtwork(api);
   const [draft, setDraft] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -153,7 +154,6 @@ export function App({ api }: AppProps) {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("kanban");
   const [createTaskRequest, setCreateTaskRequest] = useState(0);
   const [createTaskDraft, setCreateTaskDraft] = useState<PiTaskDraft>();
-  const [projectTrust, setProjectTrust] = useState<ProjectSelection | null>(null);
   const [queueMode, setQueueMode] = useState<"steer" | "followUp">(
     preferences.defaultQueueMode,
   );
@@ -164,22 +164,39 @@ export function App({ api }: AppProps) {
   const bootstrap = state.bootstrap;
   const piReady = piHealth?.state === "ready" && Boolean(bootstrap);
 
+  const reportActionError = (action: string, cause: unknown) => {
+    if (isReportedRuntimeError(cause)) return;
+    controller.notify(`${action}失败：${errorMessage(cause)}`, "error");
+  };
+
+  const runAction = (action: string, operation: () => Promise<unknown>) => {
+    void operation().catch((cause: unknown) => reportActionError(action, cause));
+  };
+
   useEffect(() => {
     if (!skinArtwork.loadError) return;
     controller.notify(`自定义背景加载失败：${skinArtwork.loadError}`, "error");
     skinArtwork.clearLoadError();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- controller/skinArtwork 每次渲染都是新引用；只需在 loadError 变化时提示一次
   }, [skinArtwork.loadError]);
 
+  const runtimeNotify = controller.notify;
+  useEffect(() => {
+    if (!preferencesStorageError) return;
+    runtimeNotify(preferencesStorageError, "error");
+  }, [preferencesStorageError, runtimeNotify]);
+
+  const runtimeCommand = controller.command;
   useEffect(() => {
     const bootstrap = state.bootstrap;
     if (state.phase !== "ready" || !bootstrap) return;
     const preferenceKey = `${bootstrap.project.cwd}:${bootstrap.state.sessionId}:${String(preferences.autoRetry)}`;
     if (appliedRetryPreference.current === preferenceKey) return;
     appliedRetryPreference.current = preferenceKey;
-    void controller.command({ type: "set_auto_retry", enabled: preferences.autoRetry }).catch(() => {
+    void runtimeCommand({ type: "set_auto_retry", enabled: preferences.autoRetry }).catch(() => {
       if (appliedRetryPreference.current === preferenceKey) appliedRetryPreference.current = undefined;
     });
-  }, [controller.command, preferences.autoRetry, state.bootstrap, state.phase]);
+  }, [runtimeCommand, preferences.autoRetry, state.bootstrap, state.phase]);
 
   const focusComposer = () => {
     window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="给 Pi 的消息"]')?.focus(), 0);
@@ -238,12 +255,12 @@ export function App({ api }: AppProps) {
   const chooseProject = async () => {
     const selection = await controller.chooseProject();
     if (!selection) return;
-    if (selection.requiresTrust) setProjectTrust(selection);
-    else await controller.openProject(selection.path, false);
+    await controller.openProject(selection.path, selection.requiresTrust);
   };
 
   const openRecentProject = async (project: RecentProject) => {
-    await controller.openProject(project.path, project.trusted);
+    const opened = await controller.openProject(project.path, project.trusted);
+    if (!opened) return;
     setSidebarOpen(false);
   };
 
@@ -264,16 +281,15 @@ export function App({ api }: AppProps) {
       await controller.command({ type: "set_model", provider: model.provider, modelId: model.id }, true);
       controller.notify(`全局模型已切换到 ${model.name}`, "success");
     } catch (cause) {
-      controller.notify(`模型切换失败：${cause instanceof Error ? cause.message : String(cause)}`, "error");
+      reportActionError("切换模型", cause);
     } finally {
       setModelChanging(false);
     }
   };
 
   const setThinking = async (level: string) => {
-    const valid = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-    if (!valid.has(level as ThinkingLevel)) throw new Error(`不支持的思考级别: ${level}`);
-    await controller.command({ type: "set_thinking_level", level: level as ThinkingLevel }, true);
+    if (!AGENT_THINKING_LEVELS.includes(level as AgentThinkingLevel)) throw new Error(`不支持的思考级别: ${level}`);
+    await controller.command({ type: "set_thinking_level", level: level as AgentThinkingLevel }, true);
   };
 
   const chooseSkinArtwork = async (skin: SkinId) => {
@@ -329,8 +345,12 @@ export function App({ api }: AppProps) {
   const exportSession = async () => {
     const response = await controller.command({ type: "export_html" });
     const path = exportedPath(responseData(response));
-    controller.notify(`会话已导出到 ${path}`, "success");
-    await api.revealPath(path);
+    try {
+      await api.revealPath(path);
+      controller.notify(`会话已导出到 ${path}`, "success");
+    } catch (cause) {
+      controller.notify(`会话已导出到 ${path}，但无法在文件管理器中显示：${errorMessage(cause)}`, "error");
+    }
   };
 
   const paletteActions = useMemo<readonly PaletteAction[]>(
@@ -338,7 +358,7 @@ export function App({ api }: AppProps) {
       const actions: PaletteAction[] = [
         { id: "team", label: "打开团队协作", detail: "在 Task Room 中 @lead 或直接委派 Worker", icon: UsersRound, run: () => setWorkspaceView("team") },
         { id: "kanban", label: "打开任务看板", detail: "监督固定 Agent 团队与流程", icon: LayoutDashboard, run: () => setWorkspaceView("kanban") },
-        { id: "project", label: "打开项目", detail: "选择新的本地工作目录", icon: FolderOpen, run: () => void chooseProject() },
+        { id: "project", label: "打开项目", detail: "选择新的本地工作目录", icon: FolderOpen, run: () => runAction("打开项目", chooseProject) },
       ];
       if (!bootstrap) return actions;
       return [
@@ -346,15 +366,17 @@ export function App({ api }: AppProps) {
         { id: "task", label: "新建看板任务", detail: "选择固定流程并分发", icon: Plus, run: newTask },
         { id: "capture-task", label: "固化当前会话为任务", detail: "打开带来源 identity 的可编辑草稿", icon: ListPlus, run: solidifyCurrentSession },
         { id: "chat", label: "返回当前会话", detail: "与 Pi 直接对话", icon: MessagesSquare, run: () => setWorkspaceView("chat") },
-        { id: "new", label: "新建会话", detail: "开始一个干净的 Pi 会话", icon: Plus, run: () => void newSession() },
+        { id: "new", label: "新建会话", detail: "开始一个干净的 Pi 会话", icon: Plus, run: () => runAction("新建会话", newSession) },
         { id: "terminal", label: "运行命令", detail: "打开本地命令抽屉", icon: TerminalSquare, run: () => setTerminalOpen(true) },
         { id: "tree", label: "查看会话图谱", detail: "检查工具活动与分支结构", icon: GitFork, run: () => { setWorkspaceView("chat"); setInspectorOpen(true); } },
-        { id: "compact", label: "压缩上下文", detail: "生成摘要并释放模型窗口", icon: Archive, run: () => void compact() },
-        { id: "export", label: "导出 HTML", detail: "保存当前会话记录", icon: FileOutput, run: () => void exportSession() },
+        { id: "compact", label: "压缩上下文", detail: "生成摘要并释放模型窗口", icon: Archive, run: () => runAction("压缩上下文", compact) },
+        { id: "export", label: "导出 HTML", detail: "保存当前会话记录", icon: FileOutput, run: () => runAction("导出会话", exportSession) },
         { id: "settings", label: "偏好设置", detail: "外观、队列和 Pi 行为", icon: Settings2, run: () => setSettingsOpen(true) },
       ];
     },
-    [bootstrap?.state.sessionId],
+    // 动作闭包读取 bootstrap（messages / sessionFile）与 taskHealth，必须随它们重建，否则固化会话用到旧数据。
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 动作函数每次渲染重建；只需在 bootstrap/taskHealth 变化时重算，其余依赖会导致 memo 失效
+    [bootstrap, taskHealth],
   );
 
   useEffect(() => {
@@ -367,7 +389,7 @@ export function App({ api }: AppProps) {
       if (ctrl && event.key.toLocaleLowerCase() === "n") {
         event.preventDefault();
         if (workspaceView === "kanban" || workspaceView === "team") newTask();
-        else void newSession();
+        else runAction("新建会话", newSession);
       }
       if (ctrl && event.key.toLocaleLowerCase() === "l") {
         event.preventDefault();
@@ -391,7 +413,9 @@ export function App({ api }: AppProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [workspaceView]);
+    // newTask / newSession 闭包读取 bootstrap，必须随 bootstrap 重建，否则快捷键看到过期状态。
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- newTask/newSession 每次渲染重建；跟踪 workspaceView/bootstrap 已覆盖闭包读取的全部状态
+  }, [workspaceView, bootstrap]);
 
   return (
     <div className={`app-shell app-shell--${workspaceView} ${workspaceView === "chat" && inspectorOpen ? "has-inspector" : ""} ${terminalOpen ? "has-terminal" : ""}`}>
@@ -406,12 +430,12 @@ export function App({ api }: AppProps) {
         activeView={workspaceView}
         modelChanging={modelChanging}
         onClose={() => setSidebarOpen(false)}
-        onNewSession={() => void newSession()}
+        onNewSession={() => runAction("新建会话", newSession)}
         onNewTask={newTask}
         onSwitchView={(view) => { setWorkspaceView(view); setSidebarOpen(false); }}
-        onChooseProject={() => void chooseProject()}
-        onOpenRecentProject={(project) => void openRecentProject(project)}
-        onSwitchSession={(session) => void switchSession(session)}
+        onChooseProject={() => runAction("打开项目", chooseProject)}
+        onOpenRecentProject={(project) => runAction("打开最近项目", () => openRecentProject(project))}
+        onSwitchSession={(session) => runAction("切换会话", () => switchSession(session))}
         onOpenPalette={() => setPaletteOpen(true)}
         onOpenTerminal={() => setTerminalOpen(true)}
         onOpenInspector={() => setInspectorOpen(true)}
@@ -431,8 +455,8 @@ export function App({ api }: AppProps) {
           onOpenSidebar={() => setSidebarOpen(true)}
           onToggleInspector={() => setInspectorOpen((value) => !value)}
           onOpenSettings={() => setSettingsOpen(true)}
-          onThinkingChange={(level) => void setThinking(level)}
-          onAbortRetry={() => void controller.command({ type: "abort_retry" })}
+          onThinkingChange={(level) => runAction("切换思考级别", () => setThinking(level))}
+          onAbortRetry={() => runAction("停止自动重试", () => controller.command({ type: "abort_retry" }))}
           onSolidifyTask={solidifyCurrentSession}
         />
         <Conversation
@@ -442,7 +466,7 @@ export function App({ api }: AppProps) {
           tools={state.tools}
           streaming={state.streaming}
           onPrefill={(text) => { setDraft(text); focusComposer(); }}
-          onFork={(entryId) => void fork(entryId)}
+          onFork={(entryId) => runAction("创建会话分支", () => fork(entryId))}
         />
         <Composer
           draft={draft}
@@ -457,7 +481,7 @@ export function App({ api }: AppProps) {
             setPreferences(Object.freeze({ ...preferences, defaultQueueMode: mode }));
           }}
           onSend={sendPrompt}
-          onStop={() => void controller.command({ type: "abort" })}
+          onStop={() => runAction("停止生成", () => controller.command({ type: "abort" }))}
           onOpenTerminal={() => setTerminalOpen(true)}
           onOpenPalette={() => setPaletteOpen(true)}
           onError={(message) => controller.notify(message, "error")}
@@ -481,9 +505,9 @@ export function App({ api }: AppProps) {
               {state.stderr && <details><summary>查看 Pi 诊断输出</summary><pre>{state.stderr}</pre></details>}
               <div className="capability-workspace__actions">
                 <button type="button" className="button-primary" disabled={capabilities.state.retrying.includes("pi")} onClick={() => void capabilities.retry("pi").then((snapshot) => {
-                  if (snapshot.pi.state === "ready") void controller.refresh();
-                })}><RefreshCw size={15} />{capabilities.state.retrying.includes("pi") ? "正在重试" : "重试 Pi"}</button>
-                <button type="button" className="button-secondary" onClick={() => void chooseProject()}><FolderOpen size={15} />选择其他项目</button>
+                  if (snapshot.pi.state === "ready") void controller.refresh().catch((cause: unknown) => controller.notify(`刷新 Pi 工作区失败：${cause instanceof Error ? cause.message : String(cause)}`, "error"));
+                }).catch((cause: unknown) => controller.notify(`重试 Pi 失败：${cause instanceof Error ? cause.message : String(cause)}`, "error"))}><RefreshCw size={15} />{capabilities.state.retrying.includes("pi") ? "正在重试" : "重试 Pi"}</button>
+                <button type="button" className="button-secondary" onClick={() => runAction("打开项目", chooseProject)}><FolderOpen size={15} />选择其他项目</button>
                 <button type="button" className="button-secondary" onClick={() => setWorkspaceView("kanban")}><LayoutDashboard size={15} />查看任务看板</button>
               </div>
             </>}
@@ -508,9 +532,10 @@ export function App({ api }: AppProps) {
           executionEnabled={piReady}
           taskCapabilityError={taskHealth?.error}
           taskCapabilityRetrying={capabilities.state.retrying.includes("task")}
-          onRetryTaskCapability={() => void capabilities.retry("task")}
+          onRetryTaskCapability={() => void capabilities.retry("task").catch((cause: unknown) => controller.notify(`重试 Task Control 失败：${cause instanceof Error ? cause.message : String(cause)}`, "error"))}
           createRequest={createTaskRequest}
           createDraft={createTaskDraft}
+          onCreateRequestConsumed={() => setCreateTaskRequest(0)}
           onContinueTaskSession={(taskId, sessionPath) => continueTaskSession(taskId, sessionPath)}
           onOpenSidebar={() => setSidebarOpen(true)}
           onOpenTerminal={() => setTerminalOpen(true)}
@@ -526,11 +551,11 @@ export function App({ api }: AppProps) {
         extensionStatuses={state.extensionStatuses}
         extensionWidgets={state.extensionWidgets}
         onClose={() => setInspectorOpen(false)}
-        onCompact={() => void compact()}
-        onExport={() => void exportSession()}
-        onClone={() => void cloneSession()}
+        onCompact={() => runAction("压缩上下文", compact)}
+        onExport={() => runAction("导出会话", exportSession)}
+        onClone={() => runAction("克隆会话", cloneSession)}
         onRename={() => setRenameOpen(true)}
-        onFork={(entryId) => void fork(entryId)}
+        onFork={(entryId) => runAction("创建会话分支", () => fork(entryId))}
       />}
 
       {bootstrap && piReady && <TerminalDrawer
@@ -538,8 +563,11 @@ export function App({ api }: AppProps) {
         cwd={bootstrap.project.cwd}
         onClose={() => setTerminalOpen(false)}
         onRun={async (command) => parseBashResult(responseData(await controller.command({ type: "bash", command })))}
-        onAbort={async () => { await controller.command({ type: "abort_bash" }); }}
-        onRevealPath={(path) => void api.revealPath(path)}
+        onAbort={async () => {
+          try { await controller.command({ type: "abort_bash" }); }
+          catch (cause) { reportActionError("停止命令", cause); }
+        }}
+        onRevealPath={(path) => runAction("显示命令输出", () => api.revealPath(path))}
       />}
 
       {paletteOpen && (
@@ -550,15 +578,10 @@ export function App({ api }: AppProps) {
           onInsertCommand={(command: SlashCommandSummary) => { setDraft(`/${command.name} `); focusComposer(); }}
         />
       )}
-      {projectTrust && <ProjectTrustDialog project={projectTrust} onCancel={() => setProjectTrust(null)} onSelect={(trusted) => {
-        const project = projectTrust;
-        setProjectTrust(null);
-        void controller.openProject(project.path, trusted);
-      }} />}
-      {state.extensionRequest && <ExtensionDialog request={state.extensionRequest} onRespond={(response) => void controller.respondToExtension(response)} onExpire={controller.expireExtensionRequest} />}
+      {state.extensionRequest && <ExtensionDialog request={state.extensionRequest} onRespond={(response) => void controller.respondToExtension(response).catch((cause: unknown) => controller.notify(`回复扩展请求失败：${cause instanceof Error ? cause.message : String(cause)}`, "error"))} onExpire={controller.expireExtensionRequest} />}
       {renameOpen && bootstrap && <TextPromptDialog title="重命名会话" eyebrow="SESSION NAME" label="会话名称" initialValue={bootstrap.state.sessionName ?? ""} confirmLabel="保存名称" onCancel={() => setRenameOpen(false)} onConfirm={(name) => {
         setRenameOpen(false);
-        void controller.command({ type: "set_session_name", name }, true);
+        runAction("重命名会话", () => controller.command({ type: "set_session_name", name }, true));
       }} />}
       {settingsOpen && bootstrap && (
         <SettingsDialog
@@ -569,11 +592,11 @@ export function App({ api }: AppProps) {
           onPreferencesChange={setPreferences}
           onChooseSkinArtwork={(skin) => void chooseSkinArtwork(skin)}
           onResetSkinArtwork={(skin) => void resetSkinArtwork(skin)}
-          onAutoCompactionChange={(enabled) => void controller.command({ type: "set_auto_compaction", enabled }, true)}
-          onSteeringModeChange={(mode) => void controller.command({ type: "set_steering_mode", mode }, true)}
-          onFollowUpModeChange={(mode) => void controller.command({ type: "set_follow_up_mode", mode }, true)}
-          onRestartTrust={(trusted) => void controller.openProject(bootstrap.project.cwd, trusted)}
-          onOpenLink={(url) => void api.openExternal(url)}
+          onAutoCompactionChange={(enabled) => runAction("更新自动压缩设置", () => controller.command({ type: "set_auto_compaction", enabled }, true))}
+          onSteeringModeChange={(mode) => runAction("更新 Steering 模式", () => controller.command({ type: "set_steering_mode", mode }, true))}
+          onFollowUpModeChange={(mode) => runAction("更新 Follow-up 模式", () => controller.command({ type: "set_follow_up_mode", mode }, true))}
+          onRestartTrust={(trusted) => runAction("切换项目信任模式", () => controller.openProject(bootstrap.project.cwd, trusted))}
+          onOpenLink={(url) => runAction("打开外部链接", () => api.openExternal(url))}
           onClose={() => setSettingsOpen(false)}
         />
       )}

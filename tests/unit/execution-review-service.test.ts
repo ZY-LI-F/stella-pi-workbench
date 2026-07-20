@@ -134,6 +134,37 @@ describe("ExecutionReviewService", () => {
     expect(repository.state).toBe(decided);
   });
 
+  it("blocks review while the task has a newer active execution", async () => {
+    const base = initialState();
+    const repository = new MemoryRepository(parseBoardState({
+      ...base,
+      tasks: base.tasks.map((task) => ({ ...task, activeAgentTaskId: "agent-active" })),
+      agentTasks: [
+        ...base.agentTasks,
+        {
+          id: "agent-active", taskId: TASK.id, agentSnapshot: builder, kind: "direct", status: "queued",
+          acceptance: "not-ready", prompt: "新一轮执行", createdAt: REVIEWED_AT, updatedAt: REVIEWED_AT,
+        },
+      ],
+    }));
+    let id = 0;
+    const service = new ExecutionReviewService({
+      repository,
+      catalog: BUILTIN_ORCHESTRATION_CATALOG,
+      emitChanged: () => undefined,
+      now: () => REVIEWED_AT,
+      id: () => `review-${++id}`,
+    });
+    const before = repository.state;
+    await expect(service.review({ taskId: TASK.id, executionKind: "workflow", executionId: "run-reported", decision: "accept", comment: "" }))
+      .rejects.toThrow("正在进行的执行");
+    await expect(service.review({ taskId: TASK.id, executionKind: "agent-task", executionId: "agent-reported", decision: "revision-requested", comment: "先中止执行" }))
+      .rejects.toThrow("正在进行的执行");
+    await expect(service.review({ taskId: TASK.id, executionKind: "agent-task", executionId: "agent-reported", decision: "reject", comment: "先中止执行" }))
+      .rejects.toThrow("正在进行的执行");
+    expect(repository.state).toBe(before);
+  });
+
   it("requires reasons for revision/rejection and rejects failed false-success review", async () => {
     const { repository, service } = setup();
     await expect(service.review({ taskId: TASK.id, executionKind: "workflow", executionId: "run-reported", decision: "reject", comment: "  " }))

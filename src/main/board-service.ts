@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { BoardRepository } from "./board-repository";
 import {
+  AGENT_THINKING_LEVELS,
   TASK_PRIORITIES,
   canMoveTaskManually,
   type BoardBootstrap,
@@ -215,8 +216,7 @@ export class BoardService {
     if (workspaceAccess === "read" && allowedTools.some((tool) => tool === "bash" || tool === "edit" || tool === "write")) {
       throw new Error("只读 Agent 不能启用 bash、edit 或 write");
     }
-    const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-    if (!thinkingLevels.has(input.thinking)) throw new Error(`无效 thinking level: ${String(input.thinking)}`);
+    if (!AGENT_THINKING_LEVELS.includes(input.thinking)) throw new Error(`无效 thinking level: ${String(input.thinking)}`);
     const requiredSkills = input.requiredSkills?.map((skill) => normalizedText(skill, "Required Skill", true));
     const id = existing?.id ?? `custom-${callsign.toLocaleLowerCase()}`;
     return Object.freeze({

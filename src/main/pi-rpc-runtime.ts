@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import type { PiCommand, PiExtensionResponse, PiResponse, RuntimeSignal } from "../shared/contracts";
+import type { AgentThinkingLevel } from "../shared/kanban";
 
 type SpawnProcess = (
   command: string,
@@ -24,7 +25,7 @@ export interface PiRuntimeStartOptions {
   readonly sessionName?: string;
   readonly provider?: string;
   readonly model?: string;
-  readonly thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  readonly thinking?: AgentThinkingLevel;
   readonly allowedTools?: readonly string[];
   readonly appendSystemPrompt?: string;
   readonly disableExtensions?: boolean;

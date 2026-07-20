@@ -17,6 +17,26 @@ class MemoryRepository implements BoardRepository {
   }
 }
 
+class HoldUpdateRepository extends MemoryRepository {
+  #hold?: { readonly matches: (next: BoardState) => boolean; readonly release: Promise<void>; readonly onHeld: () => void };
+
+  holdNextMatching(matches: (next: BoardState) => boolean, release: Promise<void>): Promise<void> {
+    return new Promise((resolve) => {
+      this.#hold = { matches, release, onHeld: resolve };
+    });
+  }
+
+  override async update(transform: (current: BoardState) => BoardState): Promise<BoardState> {
+    const hold = this.#hold;
+    if (hold && hold.matches(transform(this.state))) {
+      this.#hold = undefined;
+      hold.onHeld();
+      await hold.release;
+    }
+    return super.update(transform);
+  }
+}
+
 class FakeRuntime implements WorkflowAgentRuntime {
   running = false;
   readonly commands: PiCommand[] = [];
@@ -60,8 +80,9 @@ function idFactory(): () => string {
 async function setup(
   runtimeFactory = new FakeRuntimeFactory(),
   globalModel: () => Readonly<{ readonly provider: string; readonly model: string }> | undefined = () => undefined,
+  repository = new MemoryRepository(),
+  resolveProjectPath: (projectPath: string, trusted: boolean) => Promise<string> = async (projectPath) => projectPath,
 ) {
-  const repository = new MemoryRepository();
   const events: BoardBridgeEvent[] = [];
   const admission = new WorkspaceAdmission({ canonicalize: async (path) => path.toLocaleLowerCase("en-US") });
   const id = idFactory();
@@ -80,6 +101,7 @@ async function setup(
     emitBoardEvent: (event) => events.push(event),
     admission,
     globalModel,
+    resolveProjectPath,
     id,
     now: () => "2026-07-17T00:00:00.000Z",
   });
@@ -100,6 +122,24 @@ describe("WorkflowOrchestrator", () => {
       provider: "openai",
       model: "gpt-global",
     })));
+  });
+
+  it("fails the workflow before starting Pi when project identity verification fails", async () => {
+    const runtimeFactory = new FakeRuntimeFactory();
+    const resolveProjectPath = vi.fn(async () => { throw new Error("受信任项目路径的真实位置已变化"); });
+    const { repository, orchestrator, taskId } = await setup(
+      runtimeFactory,
+      () => undefined,
+      new MemoryRepository(),
+      resolveProjectPath,
+    );
+
+    await orchestrator.dispatch(taskId);
+
+    await vi.waitFor(() => expect(repository.state.runs[0]?.status).toBe("failed"));
+    expect(resolveProjectPath).toHaveBeenCalledWith("C:/project", true);
+    expect(runtimeFactory.runtimes[0]?.start).not.toHaveBeenCalled();
+    expect(repository.state.tasks.find((task) => task.id === taskId)?.stage).toBe("blocked");
   });
 
   it("runs isolated Agents in order and pauses at the plan gate", async () => {
@@ -161,6 +201,33 @@ describe("WorkflowOrchestrator", () => {
     expect(repository.state.tasks[0]?.stage).toBe("blocked");
     expect(repository.state.runs[0]?.status).toBe("interrupted");
     expect(repository.state.runs[0]?.steps[0]?.artifact).toBeUndefined();
+  });
+
+  it("does not resurrect an interrupted run when a pending gate commit lands late", async () => {
+    const repository = new HoldUpdateRepository();
+    const runtimeFactory = new FakeRuntimeFactory();
+    const { orchestrator, taskId } = await setup(runtimeFactory, () => undefined, repository);
+    await orchestrator.dispatch(taskId);
+    await vi.waitFor(() => expect(runtimeFactory.runtimes[0]?.commands.some((command) => command.type === "prompt")).toBe(true));
+    runtimeFactory.runtimes[0]?.settle();
+    await vi.waitFor(() => expect(runtimeFactory.runtimes[1]?.commands.some((command) => command.type === "prompt")).toBe(true));
+
+    let releaseGateCommit: (() => void) | undefined;
+    const held = repository.holdNextMatching(
+      (next) => next.runs[0]?.status === "review",
+      new Promise<void>((resolve) => { releaseGateCommit = resolve; }),
+    );
+    runtimeFactory.runtimes[1]?.settle();
+    await held;
+    await orchestrator.abort(taskId);
+    releaseGateCommit?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(repository.state.runs[0]?.status).toBe("interrupted");
+    expect(repository.state.tasks[0]?.stage).toBe("blocked");
+    expect(repository.state.tasks[0]?.activeRunId).toBeUndefined();
+    expect(repository.state.runs[0]?.currentStepId).toBeUndefined();
+    expect(repository.state.runs[0]?.steps.every((step) => step.status !== "waiting")).toBe(true);
   });
 
   it("persists interruption before stopping active runtimes during shutdown", async () => {

@@ -82,20 +82,27 @@ export class SkinArtworkService {
 
   async list(): Promise<readonly StoredSkinArtwork[]> {
     await this.#storage.mkdir(this.#directory);
-    const fileNames = await this.#storage.readdir(this.#directory);
-    const artworkBySkin = new Map<SkinId, StoredSkinArtwork>();
+    const fileNames = [...await this.#storage.readdir(this.#directory)].sort((left, right) => left.localeCompare(right));
+    const artworkBySkin = new Map<SkinId, StoredSkinArtwork[]>();
     for (const fileName of fileNames) {
       const parsed = parsedStoredFileName(fileName);
       if (!parsed) continue;
-      if (artworkBySkin.has(parsed.skin)) {
-        throw new Error(`皮肤 ${parsed.skin} 存在多个自定义背景文件，请删除用户数据目录中的重复文件`);
-      }
       const path = join(this.#directory, fileName);
       const metadata = await this.#storage.stat(path);
       if (!metadata.isFile()) throw new Error(`自定义背景不是文件: ${path}`);
-      artworkBySkin.set(parsed.skin, Object.freeze({ skin: parsed.skin, path, updatedAt: metadata.mtimeMs }));
+      const artwork = Object.freeze({ skin: parsed.skin, path, updatedAt: metadata.mtimeMs });
+      artworkBySkin.set(parsed.skin, [...(artworkBySkin.get(parsed.skin) ?? []), artwork]);
     }
-    return Object.freeze([...artworkBySkin.values()]);
+
+    const records: StoredSkinArtwork[] = [];
+    for (const skin of SKIN_IDS) {
+      const candidates = artworkBySkin.get(skin) ?? [];
+      if (candidates.length > 1) {
+        throw new Error(`皮肤 ${skin} 存在多个自定义背景文件：${candidates.map((candidate) => candidate.path).join("、")}；请删除冲突文件后重试`);
+      }
+      if (candidates[0]) records.push(candidates[0]);
+    }
+    return Object.freeze(records);
   }
 
   async find(skin: SkinId): Promise<StoredSkinArtwork | null> {

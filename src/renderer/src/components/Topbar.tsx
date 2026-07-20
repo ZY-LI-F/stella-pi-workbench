@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import type { RuntimeBootstrap } from "@shared/contracts";
+import { AGENT_THINKING_LEVELS } from "@shared/kanban";
 
 interface TopbarProps {
   readonly bootstrap: RuntimeBootstrap;
@@ -22,8 +23,6 @@ interface TopbarProps {
   readonly onAbortRetry: () => void;
   readonly onSolidifyTask: () => void;
 }
-
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function activityLabel(streaming: boolean, compacting: boolean, retrying: boolean): string {
   if (compacting) return "正在压缩上下文";
@@ -64,7 +63,7 @@ export function Topbar({
           <MoonStar size={13} />
           <span className="sr-only">思考级别</span>
           <select value={bootstrap.state.thinkingLevel} onChange={(event) => onThinkingChange(event.target.value)}>
-            {THINKING_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
+            {AGENT_THINKING_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
           </select>
           <ChevronDown size={13} />
         </label>

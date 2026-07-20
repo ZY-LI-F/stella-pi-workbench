@@ -8,6 +8,7 @@ import type {
   AutomationRuntimeStatus,
   CreateAutopilotInput,
   CreateSquadInput,
+  KanbanTask,
   OrchestrationCatalog,
   Squad,
   UpdateAutopilotInput,
@@ -20,6 +21,7 @@ interface AutomationStudioDialogProps {
   readonly catalog: OrchestrationCatalog;
   readonly project: ProjectMeta;
   readonly squads: readonly Squad[];
+  readonly tasks: readonly KanbanTask[];
   readonly autopilots: readonly Autopilot[];
   readonly autopilotRuns: readonly AutopilotRun[];
   readonly webhookStatus?: AutomationRuntimeStatus["webhook"];
@@ -69,6 +71,7 @@ export function AutomationStudioDialog({
   catalog,
   project,
   squads,
+  tasks,
   autopilots,
   autopilotRuns,
   webhookStatus,
@@ -91,12 +94,14 @@ export function AutomationStudioDialog({
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
+  // 仅在切换选择或所选 Squad 真正更新时重置草稿，避免看板快照抹掉输入。
+  const selectedUpdatedAt = selected?.updatedAt;
   useEffect(() => {
-    const next = selectedId === "new" ? undefined : squads.find((squad) => squad.id === selectedId);
-    setDraft(next ? squadDraft(next) : emptyDraft(squadAgents));
+    setDraft(selected ? squadDraft(selected) : emptyDraft(squadAgents));
     setError("");
     setConfirmDelete(false);
-  }, [selectedId, squadAgents, squads]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意只依赖选择标识与 updatedAt：看板快照的身份抖动不应抹掉用户草稿
+  }, [selectedId, selectedUpdatedAt]);
 
   const leader = squadAgents.find((agent) => agent.id === draft.leaderAgentId);
   const members = useMemo(() => squadAgents.filter((agent) => draft.memberAgentIds.includes(agent.id)), [draft.memberAgentIds, squadAgents]);
@@ -207,6 +212,7 @@ export function AutomationStudioDialog({
           project={project}
           catalog={catalog}
           squads={squads}
+          tasks={tasks}
           autopilots={autopilots}
           runs={autopilotRuns}
           webhookStatus={webhookStatus}

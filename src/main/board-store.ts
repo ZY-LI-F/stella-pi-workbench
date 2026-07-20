@@ -40,10 +40,12 @@ export class BoardStore implements BoardRepository {
     this.#state = loaded;
     const interruptedRuns = loaded.runs.filter((run) => run.status === "queued" || run.status === "running");
     const interruptedAgentTasks = loaded.agentTasks.filter((agentTask) => agentTask.status === "running");
-    if (interruptedRuns.length === 0 && interruptedAgentTasks.length === 0) return loaded;
+    const interruptedAutopilotRuns = loaded.autopilotRuns.filter((run) => run.status === "running");
+    if (interruptedRuns.length === 0 && interruptedAgentTasks.length === 0 && interruptedAutopilotRuns.length === 0) return loaded;
 
     const interruptedIds = new Set(interruptedRuns.map((run) => run.id));
     const interruptedAgentTaskIds = new Set(interruptedAgentTasks.map((agentTask) => agentTask.id));
+    const interruptedAutopilotRunIds = new Set(interruptedAutopilotRuns.map((run) => run.id));
     const now = this.#dependencies.now();
     return this.update((current) => {
       const workflowActivities: TaskActivity[] = interruptedRuns.map((run) => Object.freeze({
@@ -104,6 +106,9 @@ export class BoardStore implements BoardRepository {
               completedAt: now,
             })
           : agentTask),
+        autopilotRuns: current.autopilotRuns.map((run) => interruptedAutopilotRunIds.has(run.id)
+          ? Object.freeze({ ...run, status: "failed" as const, error: "应用重启，执行中断", completedAt: now })
+          : run),
         activities: [...current.activities, ...workflowActivities, ...agentTaskActivities],
       };
     });
