@@ -7,6 +7,7 @@ import {
   GitFork,
   LayoutDashboard,
   MessagesSquare,
+  SlidersHorizontal,
   PanelLeftClose,
   Search,
   Settings2,
@@ -40,7 +41,7 @@ interface SidebarProps {
   readonly onModelChange: (model: ModelSummary) => void;
 }
 
-export type WorkspaceView = "chat" | "team" | "kanban";
+export type WorkspaceView = "chat" | "team" | "kanban" | "models";
 
 const CAPABILITY_LABEL: Readonly<Record<CapabilityName, string>> = Object.freeze({
   pi: "Pi",
@@ -162,6 +163,10 @@ export function Sidebar({
           <button type="button" className={activeView === "chat" ? "is-active" : ""} onClick={() => onSwitchView("chat")}>
             <MessagesSquare size={16} />
             <span>当前会话</span>
+          </button>
+          <button type="button" className={activeView === "models" ? "is-active" : ""} onClick={() => onSwitchView("models")}>
+            <SlidersHorizontal size={16} />
+            <span>模型配置</span>
           </button>
           <button type="button" onClick={onOpenPalette}>
             <Search size={16} />

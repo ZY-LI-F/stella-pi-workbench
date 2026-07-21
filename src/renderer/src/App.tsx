@@ -11,6 +11,7 @@ import {
   Plus,
   RefreshCw,
   Settings2,
+  SlidersHorizontal,
   TerminalSquare,
   UsersRound,
 } from "lucide-react";
@@ -53,6 +54,7 @@ import { WindowControls } from "./components/WindowControls";
 import { KanbanWorkspace } from "./features/kanban/KanbanWorkspace";
 import { createPiTaskDraft, type PiTaskDraft } from "./features/kanban/pi-task-draft";
 import { TeamWorkspace } from "./features/team/TeamWorkspace";
+import { ModelConfigurationWorkspace } from "./features/models/ModelConfigurationWorkspace";
 
 interface AppProps {
   readonly api: StellaDesktopApi;
@@ -358,6 +360,7 @@ export function App({ api }: AppProps) {
       const actions: PaletteAction[] = [
         { id: "team", label: "打开团队协作", detail: "在 Task Room 中 @lead 或直接委派 Worker", icon: UsersRound, run: () => setWorkspaceView("team") },
         { id: "kanban", label: "打开任务看板", detail: "监督固定 Agent 团队与流程", icon: LayoutDashboard, run: () => setWorkspaceView("kanban") },
+        { id: "models", label: "打开模型配置", detail: "连接 Provider、维护自定义模型并选择全局路由", icon: SlidersHorizontal, run: () => setWorkspaceView("models") },
         { id: "project", label: "打开项目", detail: "选择新的本地工作目录", icon: FolderOpen, run: () => runAction("打开项目", chooseProject) },
       ];
       if (!bootstrap) return actions;
@@ -513,6 +516,17 @@ export function App({ api }: AppProps) {
             </>}
           </section>
         </main>
+      ) : workspaceView === "models" ? (
+        <ModelConfigurationWorkspace
+          api={api}
+          bootstrap={bootstrap}
+          online={piReady}
+          modelChanging={modelChanging}
+          onOpenSidebar={() => setSidebarOpen(true)}
+          onModelChange={setModel}
+          onRuntimeRefresh={controller.refresh}
+          onNotify={controller.notify}
+        />
       ) : workspaceView === "team" ? (
         <TeamWorkspace
           api={api}

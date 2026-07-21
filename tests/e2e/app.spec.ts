@@ -43,6 +43,20 @@ test("launches the real Pi RPC workbench and exposes core controls", async ({}, 
     await expect(window.getByText("Stella", { exact: true }).first()).toBeVisible();
     await expect(window.getByLabel("最小化")).toBeVisible();
     await window.bringToFront();
+    await expect.poll(
+      () => window.evaluate(() => window.stella.capabilities().then((health) => health.pi.state)),
+      { timeout: 45_000, message: "Pi should be ready before capturing the model router" },
+    ).toBe("ready");
+    await expect(window.getByLabel("全局运行模型")).toContainText("全局生效");
+
+    await window.getByRole("button", { name: "模型配置", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "模型配置", exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(window.getByLabel("当前模型路由")).toBeVisible();
+    await expect(window.getByLabel("Provider 列表")).toBeVisible();
+    await expect(window.getByLabel("Provider 配置台")).toContainText(/auth\.json/);
+    await window.screenshot({ path: "docs/model-configuration-stella.png", fullPage: true, animations: "disabled" });
+    await window.getByRole("button", { name: "任务看板", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "任务星图" })).toBeVisible();
 
     await window.getByRole("button", { name: "新建任务", exact: true }).click();
     const taskDialog = window.getByRole("dialog", { name: "创建看板任务" });

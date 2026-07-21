@@ -40,6 +40,7 @@
     "@fontsource-variable/manrope": "5.2.8",
     "@fontsource/marck-script": "5.2.8",
     "lucide-react": "1.24.0",
+    "proper-lockfile": "4.1.2",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-markdown": "10.1.0",

@@ -73,6 +73,36 @@ test("packaged app boots its bundled Pi RPC runtime", async ({}, testInfo) => {
     ).toBe("ready");
     expect(await window.evaluate(() => window.location.protocol)).toBe("file:");
 
+    await window.evaluate(() => window.stella.modelConfigurationUpsertProvider({
+      id: "packaged-smoke",
+      name: "Packaged Smoke",
+      baseUrl: "http://127.0.0.1:9/v1",
+      api: "openai-completions",
+      authHeader: false,
+      models: [{
+        id: "smoke-model",
+        name: "Smoke Model",
+        reasoning: false,
+        imageInput: false,
+        contextWindow: 8_192,
+        maxTokens: 1_024,
+      }],
+    }));
+    const modelConfiguration = await window.evaluate(() =>
+      window.stella.modelConfigurationSaveApiKey({ providerId: "packaged-smoke", apiKey: "packaged-smoke-only" }),
+    );
+    expect(modelConfiguration.providers.find((provider) => provider.id === "packaged-smoke")).toMatchObject({
+      configured: true,
+      credentialType: "api_key",
+      hasCustomConfiguration: true,
+    });
+
+    await window.getByRole("button", { name: "模型配置", exact: true }).click();
+    await expect(window.getByRole("heading", { name: "模型配置", exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(window.getByRole("button", { name: /Packaged Smoke/ })).toBeVisible();
+    expect(await window.getByRole("dialog").allTextContents()).toEqual([]);
+    await window.getByRole("button", { name: "任务看板", exact: true }).click();
+
     await window.getByRole("button", { name: "新建任务", exact: true }).click();
     await expect(window.getByRole("dialog", { name: "创建看板任务" })).toBeVisible();
     await window.getByRole("button", { name: "取消", exact: true }).click();

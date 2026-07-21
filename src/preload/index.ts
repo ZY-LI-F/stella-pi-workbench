@@ -10,6 +10,11 @@ import type {
 import type { CapabilityHealthSnapshot, CapabilityName } from "../shared/capabilities";
 import type { SkinArtworkDescriptor, SkinId } from "../shared/skin-artwork";
 import type {
+  PiModelConfigurationProviderInput,
+  PiModelConfigurationSnapshot,
+  SavePiApiKeyInput,
+} from "../shared/model-configuration";
+import type {
   BoardBootstrap,
   CreateAutopilotInput,
   CreateProjectAgentInput,
@@ -47,6 +52,16 @@ const api: StellaDesktopApi = Object.freeze({
   revealPath: (path: string) => ipcRenderer.invoke("stella:reveal-path", path) as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("stella:open-external", url) as Promise<void>,
   copyText: (value: string) => ipcRenderer.invoke("stella:copy-text", value) as Promise<void>,
+  modelConfigurationInitialize: () =>
+    ipcRenderer.invoke("stella:model-configuration:initialize") as Promise<PiModelConfigurationSnapshot>,
+  modelConfigurationSaveApiKey: (input: SavePiApiKeyInput) =>
+    ipcRenderer.invoke("stella:model-configuration:save-api-key", input) as Promise<PiModelConfigurationSnapshot>,
+  modelConfigurationDeleteCredential: (providerId: string) =>
+    ipcRenderer.invoke("stella:model-configuration:delete-credential", providerId) as Promise<PiModelConfigurationSnapshot>,
+  modelConfigurationUpsertProvider: (input: PiModelConfigurationProviderInput) =>
+    ipcRenderer.invoke("stella:model-configuration:upsert-provider", input) as Promise<PiModelConfigurationSnapshot>,
+  modelConfigurationDeleteProvider: (providerId: string) =>
+    ipcRenderer.invoke("stella:model-configuration:delete-provider", providerId) as Promise<PiModelConfigurationSnapshot>,
   boardInitialize: () => ipcRenderer.invoke("stella:board:initialize") as Promise<BoardBootstrap>,
   boardCreateTask: (input: CreateTaskInput) =>
     ipcRenderer.invoke("stella:board:create-task", input) as Promise<BoardBootstrap>,

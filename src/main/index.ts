@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import {
+  ModelRuntime,
   SessionManager,
   hasTrustRequiringProjectResources,
 } from "@earendil-works/pi-coding-agent";
@@ -73,6 +74,11 @@ import { visibleInteractiveSessions } from "../shared/session-policy";
 import { resolveTaskSessionTarget } from "../shared/task-session-bridge";
 import { isSkinId, type SkinArtworkDescriptor, type SkinId } from "../shared/skin-artwork";
 import { SkinArtworkService, type StoredSkinArtwork } from "./skin-artwork-service";
+import {
+  FileModelConfigurationStorage,
+  ModelConfigurationService,
+  type ModelCatalogInspection,
+} from "./model-configuration-service";
 import {
   canonicalExecutionProjectPath,
   canonicalExistingPath,
@@ -173,6 +179,7 @@ let autopilotService: AutopilotService;
 let scheduleRunner: ScheduleRunner;
 let webhookServer: WebhookServer;
 let skinArtworkService: SkinArtworkService;
+let modelConfigurationService: ModelConfigurationService;
 const singleInstanceLock = app.requestSingleInstanceLock();
 
 function broadcast(source: "pi" | "runtime" | "board" | "capability", payload: unknown): void {
@@ -907,6 +914,69 @@ function piAgentDir(): string {
   return join(homedir(), ".pi", "agent");
 }
 
+let builtinModelProviderIdsPromise: Promise<ReadonlySet<string>> | undefined;
+
+function builtinModelProviderIds(): Promise<ReadonlySet<string>> {
+  builtinModelProviderIdsPromise ??= ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+    .then((modelRuntime) => new Set(modelRuntime.getProviders().map((provider) => provider.id)));
+  return builtinModelProviderIdsPromise;
+}
+
+async function inspectModelCatalog(): Promise<ModelCatalogInspection> {
+  const agentDir = piAgentDir();
+  const [modelRuntime, builtInIds] = await Promise.all([
+    ModelRuntime.create({
+      authPath: join(agentDir, "auth.json"),
+      modelsPath: join(agentDir, "models.json"),
+      allowModelNetwork: false,
+    }),
+    builtinModelProviderIds(),
+  ]);
+  const credentials = new Map((await modelRuntime.listCredentials()).map((credential) => [credential.providerId, credential.type]));
+  return Object.freeze({
+    providers: Object.freeze(modelRuntime.getProviders().map((provider) => {
+      const status = modelRuntime.getProviderAuthStatus(provider.id);
+      return Object.freeze({
+        id: provider.id,
+        name: provider.name,
+        builtIn: builtInIds.has(provider.id),
+        configured: status.configured,
+        authSource: status.source,
+        authLabel: status.label ?? provider.auth.apiKey?.name ?? provider.auth.oauth?.name,
+        credentialType: credentials.get(provider.id),
+        supportsApiKey: Boolean(provider.auth.apiKey),
+        supportsOAuth: Boolean(provider.auth.oauth),
+        catalogModelCount: modelRuntime.getModels(provider.id).length,
+      });
+    })),
+    error: modelRuntime.getError(),
+  });
+}
+
+async function reloadRuntimeAfterModelConfigurationChange(): Promise<void> {
+  if (!currentProject) return;
+  capabilityHealth.set("pi", "loading");
+  try {
+    const sessionPath = runtime.running
+      ? dataFromResponse<RuntimeBootstrap["state"]>(await runtime.send({ type: "get_state" }), "get_state").sessionFile
+      : undefined;
+    await runtime.stop();
+    interactiveCommandRouter?.release();
+    await runtime.start({ ...currentProject, sessionPath: sessionPath ?? undefined });
+    await hydrate();
+    capabilityHealth.set("pi", "ready");
+  } catch (cause) {
+    capabilityHealth.set("pi", "error", errorMessage(cause));
+    throw cause;
+  }
+}
+
+async function mutateModelConfiguration(mutation: () => Promise<void>) {
+  await mutation();
+  await reloadRuntimeAfterModelConfigurationChange();
+  return modelConfigurationService.snapshot();
+}
+
 function allowedRevealRoots(): readonly string[] {
   const roots = [piAgentDir(), app.getPath("userData"), tmpdir()];
   if (currentProject) roots.push(currentProject.cwd);
@@ -1122,6 +1192,19 @@ function registerIpcHandlers(): void {
   ipcMain.handle("stella:copy-text", (_event, value: unknown) => {
     clipboard.writeText(textValue(value, "待复制文本"));
   });
+  ipcMain.handle("stella:model-configuration:initialize", () => modelConfigurationService.snapshot());
+  ipcMain.handle("stella:model-configuration:save-api-key", (_event, input: unknown) =>
+    mutateModelConfiguration(() => modelConfigurationService.saveApiKey(input as Parameters<ModelConfigurationService["saveApiKey"]>[0])),
+  );
+  ipcMain.handle("stella:model-configuration:delete-credential", (_event, providerId: unknown) =>
+    mutateModelConfiguration(() => modelConfigurationService.deleteCredential(providerId)),
+  );
+  ipcMain.handle("stella:model-configuration:upsert-provider", (_event, input: unknown) =>
+    mutateModelConfiguration(() => modelConfigurationService.upsertProvider(input as Parameters<ModelConfigurationService["upsertProvider"]>[0])),
+  );
+  ipcMain.handle("stella:model-configuration:delete-provider", (_event, providerId: unknown) =>
+    mutateModelConfiguration(() => modelConfigurationService.deleteProvider(providerId)),
+  );
   ipcMain.handle("stella:board:initialize", async () => {
     assertTaskCapability();
     const bootstrap = await boardService.bootstrap();
@@ -1292,6 +1375,11 @@ if (!singleInstanceLock) {
         stat,
         remove: async (path: string) => { await rm(path, { force: true }); },
       }),
+    });
+    modelConfigurationService = new ModelConfigurationService({
+      agentDir: piAgentDir(),
+      storage: new FileModelConfigurationStorage(),
+      inspect: inspectModelCatalog,
     });
     registerSkinArtworkProtocol();
     registerIpcHandlers();

@@ -27,6 +27,11 @@ import type {
 } from "./kanban";
 import type { CapabilityHealthSnapshot, CapabilityName } from "./capabilities";
 import type { SkinArtworkDescriptor, SkinId } from "./skin-artwork";
+import type {
+  PiModelConfigurationProviderInput,
+  PiModelConfigurationSnapshot,
+  SavePiApiKeyInput,
+} from "./model-configuration";
 
 type WithoutRequestId<T> = T extends { id?: string } ? Omit<T, "id"> : never;
 
@@ -212,6 +217,11 @@ export interface StellaDesktopApi {
   revealPath(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   copyText(value: string): Promise<void>;
+  modelConfigurationInitialize(): Promise<PiModelConfigurationSnapshot>;
+  modelConfigurationSaveApiKey(input: SavePiApiKeyInput): Promise<PiModelConfigurationSnapshot>;
+  modelConfigurationDeleteCredential(providerId: string): Promise<PiModelConfigurationSnapshot>;
+  modelConfigurationUpsertProvider(input: PiModelConfigurationProviderInput): Promise<PiModelConfigurationSnapshot>;
+  modelConfigurationDeleteProvider(providerId: string): Promise<PiModelConfigurationSnapshot>;
   boardInitialize(): Promise<BoardBootstrap>;
   boardCreateTask(input: CreateTaskInput): Promise<BoardBootstrap>;
   boardLaunchTeamTask(input: LaunchTeamTaskInput): Promise<BoardBootstrap>;
