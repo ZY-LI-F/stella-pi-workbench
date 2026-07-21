@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PiModelConfigurationProviderInput } from "../../src/shared/model-configuration";
@@ -8,6 +9,7 @@ import {
   FileModelConfigurationStorage,
   ModelConfigurationService,
   type ModelCatalogInspection,
+  type ModelConfigurationRuntime,
   type ModelConfigurationStorage,
 } from "../../src/main/model-configuration-service";
 
@@ -52,11 +54,55 @@ const INSPECTION: ModelCatalogInspection = Object.freeze({
   ]),
 });
 
-function service(storage: MemoryModelConfigurationStorage, inspection = INSPECTION) {
+function fakeRuntime(overrides: Partial<ModelConfigurationRuntime> = {}): ModelConfigurationRuntime {
+  const model = {
+    id: "gpt-test",
+    name: "GPT Test",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.test/v1",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  return {
+    getProvider: vi.fn((providerId: string) => providerId === "openai" ? ({
+      id: "openai",
+      name: "OpenAI",
+      auth: { apiKey: { name: "OpenAI API key" } },
+    }) : undefined),
+    getModels: vi.fn((providerId?: string) => !providerId || providerId === "openai" ? [model] : []),
+    getModel: vi.fn((providerId: string, modelId: string) => providerId === "openai" && modelId === model.id ? model : undefined),
+    checkAuth: vi.fn(async (providerId: string) => providerId === "openai" ? ({ type: "api_key", source: "OPENAI_API_KEY" }) : undefined),
+    getAuth: vi.fn(async () => ({ auth: { apiKey: "resolved-secret" }, source: "OPENAI_API_KEY" })),
+    listCredentials: vi.fn(async () => []),
+    completeSimple: vi.fn(async () => ({
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "openai",
+      model: model.id,
+      responseModel: model.id,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    })),
+    ...overrides,
+  } as unknown as ModelConfigurationRuntime;
+}
+
+function service(
+  storage: MemoryModelConfigurationStorage,
+  inspection = INSPECTION,
+  runtime: ModelConfigurationRuntime = fakeRuntime(),
+) {
   return new ModelConfigurationService({
     agentDir: "C:/pi-agent",
     storage,
     inspect: vi.fn(async () => inspection),
+    runtimeFactory: vi.fn(async () => runtime),
   });
 }
 
@@ -93,6 +139,69 @@ describe("ModelConfigurationService", () => {
     }
   });
 
+  it("runs a real isolated Pi request against an OpenAI-compatible endpoint", async () => {
+    let receivedAuthorization = "";
+    let receivedBody = "";
+    const server = createServer(async (request, response) => {
+      receivedAuthorization = request.headers.authorization ?? "";
+      for await (const chunk of request) receivedBody += chunk.toString();
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end([
+        `data: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "stub-model", choices: [{ index: 0, delta: { role: "assistant", content: "OK" }, finish_reason: null }] })}`,
+        "",
+        `data: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "stub-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
+        "",
+        "data: [DONE]",
+        "",
+      ].join("\n"));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("无法创建本地模型测试端点");
+
+    const directory = await mkdtemp(join(tmpdir(), "stella-model-probe-"));
+    try {
+      await writeFile(join(directory, "models.json"), JSON.stringify({
+        providers: {
+          "local-stub": {
+            name: "Local Stub",
+            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            api: "openai-completions",
+            models: [{
+              id: "stub-model",
+              name: "Stub Model",
+              reasoning: false,
+              input: ["text"],
+              contextWindow: 8_192,
+              maxTokens: 1_024,
+            }],
+          },
+        },
+      }), "utf8");
+      await writeFile(join(directory, "auth.json"), JSON.stringify({
+        "local-stub": { type: "api_key", key: "stub-secret" },
+      }), "utf8");
+      const target = new ModelConfigurationService({
+        agentDir: directory,
+        storage: new FileModelConfigurationStorage(),
+        inspect: vi.fn(async () => ({ providers: [] })),
+      });
+
+      const result = await target.testConnection({ providerId: "local-stub", modelId: "stub-model" });
+
+      expect(result).toMatchObject({ ok: true, code: "success", providerId: "local-stub", modelId: "stub-model" });
+      expect(receivedAuthorization).toBe("Bearer stub-secret");
+      expect(JSON.parse(receivedBody)).toMatchObject({ model: "stub-model", stream: true, max_completion_tokens: 8 });
+      expect(JSON.stringify(result)).not.toContain("stub-secret");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("returns credential-blind provider metadata and never exposes inline keys", async () => {
     const storage = new MemoryModelConfigurationStorage({
       "C:/pi-agent/models.json": JSON.stringify({
@@ -118,6 +227,127 @@ describe("ModelConfigurationService", () => {
     });
     expect(JSON.stringify(snapshot)).not.toContain("super-secret-value");
     expect(JSON.stringify(snapshot)).not.toContain("also-secret");
+  });
+
+  it("reveals an effective API key only through the explicit on-demand operation", async () => {
+    const storage = new MemoryModelConfigurationStorage();
+    const runtime = fakeRuntime();
+    const target = service(storage, INSPECTION, runtime);
+
+    const snapshot = await target.snapshot();
+    expect(JSON.stringify(snapshot)).not.toContain("resolved-secret");
+
+    await expect(target.revealApiKey("openai")).resolves.toEqual({
+      providerId: "openai",
+      apiKey: "resolved-secret",
+      source: "OPENAI_API_KEY",
+    });
+    expect(runtime.getAuth).toHaveBeenCalledWith("openai");
+  });
+
+  it("never exposes an OAuth access token as an API key", async () => {
+    const getAuth = vi.fn(async () => ({ auth: { apiKey: "oauth-access-token" }, source: "OAuth" }));
+    const runtime = fakeRuntime({
+      checkAuth: vi.fn(async () => ({ type: "oauth", source: "OAuth" })),
+      listCredentials: vi.fn(async () => [{ providerId: "openai", type: "oauth" }]),
+      getAuth: getAuth as unknown as ModelConfigurationRuntime["getAuth"],
+    });
+
+    await expect(service(new MemoryModelConfigurationStorage(), INSPECTION, runtime).revealApiKey("openai"))
+      .rejects.toThrow("不显示访问令牌");
+    expect(getAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not execute a configured credential command when revealing a key", async () => {
+    const getAuth = vi.fn(async () => ({ auth: { apiKey: "command-output" }, source: "auth.json" }));
+    const runtime = fakeRuntime({
+      listCredentials: vi.fn(async () => [{ providerId: "openai", type: "api_key" }]),
+      getAuth: getAuth as unknown as ModelConfigurationRuntime["getAuth"],
+    });
+    const storage = new MemoryModelConfigurationStorage({
+      "C:/pi-agent/auth.json": JSON.stringify({ openai: { type: "api_key", key: "!password-manager read openai" } }),
+    });
+
+    await expect(service(storage, INSPECTION, runtime).revealApiKey("openai"))
+      .rejects.toThrow("不会执行");
+    expect(getAuth).not.toHaveBeenCalled();
+  });
+
+  it("tests a selected model with an unsaved key without persisting or returning the secret", async () => {
+    const storage = new MemoryModelConfigurationStorage();
+    const completeSimple = vi.fn(fakeRuntime().completeSimple);
+    const runtime = fakeRuntime({ completeSimple: completeSimple as ModelConfigurationRuntime["completeSimple"] });
+
+    const result = await service(storage, INSPECTION, runtime).testConnection({
+      providerId: "openai",
+      modelId: "gpt-test",
+      apiKey: "temporary-secret",
+    });
+
+    expect(result).toMatchObject({ ok: true, code: "success", providerId: "openai", modelId: "gpt-test" });
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(result)).not.toContain("temporary-secret");
+    expect(storage.values.size).toBe(0);
+    expect(completeSimple).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", id: "gpt-test" }),
+      expect.objectContaining({ messages: [expect.objectContaining({ content: "Reply only with OK." })] }),
+      expect.objectContaining({ apiKey: "temporary-secret", maxTokens: 8, maxRetries: 0 }),
+    );
+  });
+
+  it("treats a resolved stream error as failure and redacts credentials and authorization headers", async () => {
+    const runtime = fakeRuntime({
+      completeSimple: vi.fn(async () => ({
+        stopReason: "error",
+        errorMessage: "401 invalid API key temporary-secret; Authorization: Bearer server-token",
+      })) as unknown as ModelConfigurationRuntime["completeSimple"],
+    });
+
+    const result = await service(new MemoryModelConfigurationStorage(), INSPECTION, runtime).testConnection({
+      providerId: "openai",
+      modelId: "gpt-test",
+      apiKey: "temporary-secret",
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "authentication", modelId: "gpt-test" });
+    expect(JSON.stringify(result)).not.toContain("temporary-secret");
+    expect(JSON.stringify(result)).not.toContain("server-token");
+  });
+
+  it("never returns untrusted Provider error text that echoes the current resolved credential", async () => {
+    const resolvedCredential = "arbitrary-current-credential-without-known-prefix";
+    const runtime = fakeRuntime({
+      getAuth: vi.fn(async () => ({ auth: { apiKey: resolvedCredential }, source: "auth.json" })) as unknown as ModelConfigurationRuntime["getAuth"],
+      completeSimple: vi.fn(async () => {
+        throw Object.assign(
+          new Error(`upstream rejected credential ${resolvedCredential}; internal gateway detail`),
+          { code: resolvedCredential },
+        );
+      }) as unknown as ModelConfigurationRuntime["completeSimple"],
+    });
+
+    const result = await service(new MemoryModelConfigurationStorage(), INSPECTION, runtime).testConnection({
+      providerId: "openai",
+      modelId: "gpt-test",
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "unknown", modelId: "gpt-test" });
+    expect(JSON.stringify(result)).not.toContain(resolvedCredential);
+    expect(JSON.stringify(result)).not.toContain("internal gateway detail");
+    expect(result.message).toContain("未直接显示");
+  });
+
+  it("reports an unavailable test model without making a provider request", async () => {
+    const completeSimple = vi.fn(fakeRuntime().completeSimple);
+    const runtime = fakeRuntime({ completeSimple: completeSimple as ModelConfigurationRuntime["completeSimple"] });
+
+    const result = await service(new MemoryModelConfigurationStorage(), INSPECTION, runtime).testConnection({
+      providerId: "openai",
+      modelId: "missing-model",
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "model", modelId: "missing-model" });
+    expect(completeSimple).not.toHaveBeenCalled();
   });
 
   it("stores an API key in auth.json while preserving provider-scoped environment values", async () => {

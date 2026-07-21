@@ -30,7 +30,10 @@ import type { SkinArtworkDescriptor, SkinId } from "./skin-artwork";
 import type {
   PiModelConfigurationProviderInput,
   PiModelConfigurationSnapshot,
+  PiApiKeyRevealResult,
+  PiModelConnectionTestResult,
   SavePiApiKeyInput,
+  TestPiModelConnectionInput,
 } from "./model-configuration";
 
 type WithoutRequestId<T> = T extends { id?: string } ? Omit<T, "id"> : never;
@@ -218,6 +221,8 @@ export interface StellaDesktopApi {
   openExternal(url: string): Promise<void>;
   copyText(value: string): Promise<void>;
   modelConfigurationInitialize(): Promise<PiModelConfigurationSnapshot>;
+  modelConfigurationRevealApiKey(providerId: string): Promise<PiApiKeyRevealResult>;
+  modelConfigurationTestConnection(input: TestPiModelConnectionInput): Promise<PiModelConnectionTestResult>;
   modelConfigurationSaveApiKey(input: SavePiApiKeyInput): Promise<PiModelConfigurationSnapshot>;
   modelConfigurationDeleteCredential(providerId: string): Promise<PiModelConfigurationSnapshot>;
   modelConfigurationUpsertProvider(input: PiModelConfigurationProviderInput): Promise<PiModelConfigurationSnapshot>;

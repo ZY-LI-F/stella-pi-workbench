@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BrainCircuit,
   Check,
@@ -21,8 +21,10 @@ import {
 import type { ModelSummary, RuntimeBootstrap, StellaDesktopApi } from "@shared/contracts";
 import type {
   PiCustomProviderConfiguration,
+  PiApiKeyRevealResult,
   PiModelConfigurationProviderInput,
   PiModelConfigurationSnapshot,
+  PiModelConnectionTestResult,
   PiModelProviderSummary,
 } from "@shared/model-configuration";
 import { ProviderConfigurationDialog } from "./ProviderConfigurationDialog";
@@ -49,8 +51,8 @@ function modelKey(model: Pick<ModelSummary, "provider" | "id">): string {
 }
 
 function authSourceLabel(provider: PiModelProviderSummary): string {
-  if (!provider.configured) return "等待连接";
-  if (provider.credentialType === "oauth") return "OAuth 已连接";
+  if (!provider.configured) return "未配置凭据";
+  if (provider.credentialType === "oauth") return "OAuth 已配置";
   if (provider.credentialType === "api_key" || provider.authSource === "stored") return "auth.json";
   if (provider.authSource === "models_json_key") return "models.json";
   if (provider.authSource === "environment") return provider.authLabel ?? "环境变量";
@@ -81,10 +83,38 @@ export function ModelConfigurationWorkspace({
   const [selectedProviderId, setSelectedProviderId] = useState(bootstrap?.state.model?.provider ?? "");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [revealedApiKey, setRevealedApiKey] = useState<PiApiKeyRevealResult>();
+  const [revealingApiKey, setRevealingApiKey] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<PiModelConnectionTestResult>();
+  const [testModelId, setTestModelId] = useState("");
   const [busyAction, setBusyAction] = useState("");
   const [editorState, setEditorState] = useState<ProviderEditorState>();
+  const selectedProviderIdRef = useRef(selectedProviderId);
+  const revealRequestRef = useRef(0);
+  const connectionRequestRef = useRef(0);
+
+  const clearProviderDiagnostics = () => {
+    revealRequestRef.current += 1;
+    connectionRequestRef.current += 1;
+    setApiKey("");
+    setShowApiKey(false);
+    setRevealedApiKey(undefined);
+    setRevealingApiKey(false);
+    setTestingConnection(false);
+    setConnectionResult(undefined);
+    setTestModelId("");
+  };
+
+  const selectProvider = (providerId: string) => {
+    if (providerId === selectedProviderIdRef.current || testingConnection || Boolean(busyAction)) return;
+    selectedProviderIdRef.current = providerId;
+    clearProviderDiagnostics();
+    setSelectedProviderId(providerId);
+  };
 
   const load = async () => {
+    clearProviderDiagnostics();
     setLoading(true);
     setLoadError("");
     try {
@@ -97,6 +127,25 @@ export function ModelConfigurationWorkspace({
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    selectedProviderIdRef.current = selectedProviderId;
+    revealRequestRef.current += 1;
+    connectionRequestRef.current += 1;
+    setApiKey("");
+    setShowApiKey(false);
+    setRevealedApiKey(undefined);
+    setRevealingApiKey(false);
+    setTestingConnection(false);
+    setConnectionResult(undefined);
+    setTestModelId("");
+  }, [selectedProviderId]);
+
+  useEffect(() => {
+    if (!revealedApiKey) return undefined;
+    const timeout = window.setTimeout(() => setRevealedApiKey(undefined), 30_000);
+    return () => window.clearTimeout(timeout);
+  }, [revealedApiKey]);
 
   useEffect(() => {
     let active = true;
@@ -120,26 +169,41 @@ export function ModelConfigurationWorkspace({
   }, [providerQuery, snapshot?.providers]);
   const selectedProvider = snapshot?.providers.find((provider) => provider.id === selectedProviderId);
   const customProvider = snapshot?.customProviders.find((provider) => provider.id === selectedProviderId);
+  const providerModels = useMemo(() => (
+    (bootstrap?.models ?? []).filter((model) => model.provider === selectedProviderId)
+  ), [bootstrap?.models, selectedProviderId]);
   const models = useMemo(() => {
     const query = modelQuery.trim().toLocaleLowerCase();
-    return (bootstrap?.models ?? []).filter((model) =>
-      model.provider === selectedProviderId && (!query || `${model.name} ${model.id}`.toLocaleLowerCase().includes(query)),
-    );
-  }, [bootstrap?.models, modelQuery, selectedProviderId]);
+    return providerModels.filter((model) => !query || `${model.name} ${model.id}`.toLocaleLowerCase().includes(query));
+  }, [modelQuery, providerModels]);
   const selectedModelKey = bootstrap?.state.model ? modelKey(bootstrap.state.model) : "";
   const currentModel = bootstrap?.models.find((model) => modelKey(model) === selectedModelKey);
+  const testModels = useMemo(() => {
+    const options = new Map<string, string>();
+    if (currentModel?.provider === selectedProviderId) options.set(currentModel.id, currentModel.name || currentModel.id);
+    for (const model of providerModels) options.set(model.id, model.name || model.id);
+    for (const model of customProvider?.models ?? []) options.set(model.id, model.name || model.id);
+    if (connectionResult?.providerId === selectedProviderId && connectionResult.modelId) {
+      options.set(connectionResult.modelId, options.get(connectionResult.modelId) ?? connectionResult.modelId);
+    }
+    return [...options].map(([id, name]) => Object.freeze({ id, name }));
+  }, [connectionResult?.modelId, connectionResult?.providerId, currentModel, customProvider?.models, providerModels, selectedProviderId]);
+  const effectiveTestModelId = testModels.some((model) => model.id === testModelId)
+    ? testModelId
+    : testModels[0]?.id ?? "";
 
   const mutate = async (
     label: string,
     action: () => Promise<PiModelConfigurationSnapshot>,
-    successMessage: string,
+    successMessage: string | ((next: PiModelConfigurationSnapshot) => string),
   ) => {
     setBusyAction(label);
     try {
       const next = await action();
       setSnapshot(next);
       await onRuntimeRefresh();
-      onNotify(successMessage, "success");
+      onNotify(typeof successMessage === "function" ? successMessage(next) : successMessage, "success");
+      return next;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       onNotify(`${label}失败：${message}`, "error");
@@ -154,9 +218,91 @@ export function ModelConfigurationWorkspace({
     await mutate(
       "保存 API key",
       () => api.modelConfigurationSaveApiKey({ providerId: selectedProvider.id, apiKey }),
-      `${selectedProvider.name} 已连接，Pi 模型目录已重载`,
+      `${selectedProvider.name} 凭据已保存，Pi 模型目录已重载`,
     );
     setApiKey("");
+    setShowApiKey(false);
+    setRevealedApiKey(undefined);
+    setConnectionResult(undefined);
+  };
+
+  const revealCurrentApiKey = async () => {
+    if (!selectedProvider) return;
+    if (revealedApiKey?.providerId === selectedProvider.id) {
+      revealRequestRef.current += 1;
+      setRevealedApiKey(undefined);
+      return;
+    }
+    const providerId = selectedProvider.id;
+    const request = ++revealRequestRef.current;
+    setRevealingApiKey(true);
+    try {
+      const result = await api.modelConfigurationRevealApiKey(providerId);
+      if (request !== revealRequestRef.current || selectedProviderIdRef.current !== providerId) return;
+      setRevealedApiKey(result);
+    } catch (cause) {
+      if (request !== revealRequestRef.current || selectedProviderIdRef.current !== providerId) return;
+      onNotify(`读取 ${selectedProvider.name} API Key 失败：${cause instanceof Error ? cause.message : String(cause)}`, "error");
+    } finally {
+      if (request === revealRequestRef.current && selectedProviderIdRef.current === providerId) setRevealingApiKey(false);
+    }
+  };
+
+  const testConnection = async () => {
+    if (!selectedProvider) return;
+    const providerId = selectedProvider.id;
+    const request = ++connectionRequestRef.current;
+    setTestingConnection(true);
+    setConnectionResult(undefined);
+    const requestedModelId = effectiveTestModelId;
+    if (requestedModelId) setTestModelId(requestedModelId);
+    const draftApiKey = apiKey.trim() ? apiKey : undefined;
+    try {
+      const result = await api.modelConfigurationTestConnection({
+        providerId,
+        ...(requestedModelId ? { modelId: requestedModelId } : {}),
+        ...(draftApiKey ? { apiKey: draftApiKey } : {}),
+      });
+      if (request !== connectionRequestRef.current || selectedProviderIdRef.current !== providerId) return;
+      setConnectionResult(result);
+      if (result.modelId) setTestModelId(result.modelId);
+      onNotify(
+        result.ok
+          ? `${selectedProvider.name} / ${result.modelId ?? "模型"} 连通测试成功（${result.latencyMs} ms）`
+          : `${selectedProvider.name} 连通测试失败：${result.message}`,
+        result.ok ? "success" : "error",
+      );
+    } catch (cause) {
+      if (request !== connectionRequestRef.current || selectedProviderIdRef.current !== providerId) return;
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setConnectionResult(Object.freeze({
+        ok: false,
+        code: "unknown",
+        providerId,
+        modelId: requestedModelId || undefined,
+        latencyMs: 0,
+        checkedAt: Date.now(),
+        message,
+      }));
+      onNotify(`${selectedProvider.name} 连通测试失败：${message}`, "error");
+    } finally {
+      if (request === connectionRequestRef.current && selectedProviderIdRef.current === providerId) setTestingConnection(false);
+    }
+  };
+
+  const clearStoredCredential = async () => {
+    if (!selectedProvider) return;
+    await mutate(
+      "清除凭据",
+      () => api.modelConfigurationDeleteCredential(selectedProvider.id),
+      (next) => {
+        const provider = next.providers.find((candidate) => candidate.id === selectedProvider.id);
+        return provider?.configured
+          ? `${selectedProvider.name} 的 auth.json 凭据已清除；当前仍由 ${authSourceLabel(provider)} 提供凭据`
+          : `${selectedProvider.name} 的 auth.json 凭据已清除`;
+      },
+    );
+    clearProviderDiagnostics();
   };
 
   const saveProvider = async (input: PiModelConfigurationProviderInput) => {
@@ -165,6 +311,8 @@ export function ModelConfigurationWorkspace({
       () => api.modelConfigurationUpsertProvider(input),
       `${input.name ?? input.id} 配置已应用`,
     );
+    clearProviderDiagnostics();
+    selectedProviderIdRef.current = input.id;
     setSelectedProviderId(input.id);
   };
 
@@ -174,6 +322,7 @@ export function ModelConfigurationWorkspace({
       () => api.modelConfigurationDeleteProvider(providerId),
       `${providerId} 的 models.json 配置已移除`,
     );
+    clearProviderDiagnostics();
   };
 
   return (
@@ -183,9 +332,9 @@ export function ModelConfigurationWorkspace({
         <div className="model-config-header__identity"><span><BrainCircuit size={16} /></span><div><small>PI MODEL ROUTER</small><h1>模型配置</h1></div></div>
         <div className="model-config-header__actions">
           <span className={`model-runtime-state ${online ? "is-online" : ""}`}><i />{online ? "PI RUNTIME ONLINE" : "PI RUNTIME OFFLINE"}</span>
-          <button type="button" className="button-secondary" disabled={loading} onClick={() => void load()}><RefreshCw size={14} className={loading ? "is-spinning" : ""} />刷新</button>
+          <button type="button" className="button-secondary" disabled={loading || testingConnection || Boolean(busyAction)} onClick={() => void load()}><RefreshCw size={14} className={loading ? "spin" : ""} />刷新</button>
           <button type="button" className="button-secondary" disabled={!snapshot} onClick={() => snapshot && void api.revealPath(snapshot.agentDir).catch((cause: unknown) => onNotify(`打开 Pi 配置目录失败：${cause instanceof Error ? cause.message : String(cause)}`, "error"))}><FolderCog size={14} />配置目录</button>
-          <button type="button" className="button-primary" onClick={() => setEditorState({ builtIn: false })}><CirclePlus size={14} />自定义 Provider</button>
+          <button type="button" className="button-primary" disabled={testingConnection || Boolean(busyAction)} onClick={() => setEditorState({ builtIn: false })}><CirclePlus size={14} />自定义 Provider</button>
         </div>
       </header>
 
@@ -206,7 +355,7 @@ export function ModelConfigurationWorkspace({
           <label className="model-search"><Search size={14} /><input aria-label="搜索 Provider" value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="搜索 Provider" /></label>
           <div className="provider-rail__list">
             {loading && !snapshot ? <div className="model-config-loading"><span /><span /><span /><p>读取 Pi catalog…</p></div> : providers.map((provider) => (
-              <button type="button" key={provider.id} className={provider.id === selectedProviderId ? "is-selected" : ""} onClick={() => { setSelectedProviderId(provider.id); setApiKey(""); }}>
+              <button type="button" key={provider.id} className={provider.id === selectedProviderId ? "is-selected" : ""} aria-pressed={provider.id === selectedProviderId} disabled={(testingConnection || Boolean(busyAction)) && provider.id !== selectedProviderId} onClick={() => selectProvider(provider.id)}>
                 <span className="provider-rail__glyph">{provider.name.slice(0, 1).toLocaleUpperCase()}<i className={provider.configured ? "is-online" : ""} /></span>
                 <span className="provider-rail__copy"><strong>{provider.name}</strong><small>{provider.id} · {provider.catalogModelCount} models</small></span>
                 {provider.hasCustomConfiguration && <em>CUSTOM</em>}
@@ -218,7 +367,7 @@ export function ModelConfigurationWorkspace({
 
         <section className="model-catalog" aria-label="可用模型目录">
           <header className="model-catalog__header">
-            <div><small>AVAILABLE MODELS</small><h2>{selectedProvider?.name ?? "选择 Provider"}</h2><p>{selectedProvider?.configured ? "已通过 Pi 鉴权检查，可直接切换为全局模型。" : "连接 Provider 后，Pi 才会把模型加入可选目录。"}</p></div>
+            <div><small>AVAILABLE MODELS</small><h2>{selectedProvider?.name ?? "选择 Provider"}</h2><p>{selectedProvider?.configured ? "Pi 已发现本地凭据配置；真实可用性请在右侧发起连接测试。" : "配置 Provider 凭据后，Pi 才会把模型加入可选目录。"}</p></div>
             <label className="model-search model-search--catalog"><Search size={14} /><input aria-label="搜索可用模型" value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="按模型 ID 或名称筛选" /></label>
           </header>
           <div className="model-catalog__list">
@@ -242,7 +391,10 @@ export function ModelConfigurationWorkspace({
         <aside className="provider-console" aria-label="Provider 配置台">
           {selectedProvider ? <>
             <header><span className="provider-console__emblem">{selectedProvider.name.slice(0, 2).toLocaleUpperCase()}</span><div><small>CONNECTION INSPECTOR</small><h2>{selectedProvider.name}</h2><code>{selectedProvider.id}</code></div></header>
-            <div className={`provider-console__status ${selectedProvider.configured ? "is-online" : ""}`}><span><i />{selectedProvider.configured ? "CONNECTED" : "NOT CONFIGURED"}</span><strong>{authSourceLabel(selectedProvider)}</strong></div>
+            <div className={`provider-console__status ${selectedProvider.configured ? "is-online" : ""} ${connectionResult?.ok ? "is-verified" : connectionResult ? "is-error" : ""}`}>
+              <span><i />{connectionResult?.ok ? "CONNECTION VERIFIED" : connectionResult ? "CHECK FAILED" : selectedProvider.configured ? "CREDENTIAL READY" : "NOT CONFIGURED"}</span>
+              <strong>{connectionResult?.ok ? `${connectionResult.modelId ?? "model"} · ${connectionResult.latencyMs} ms` : authSourceLabel(selectedProvider)}</strong>
+            </div>
             <dl className="provider-console__facts">
               <div><dt>目录模型</dt><dd>{selectedProvider.catalogModelCount}</dd></div>
               <div><dt>API Key</dt><dd>{selectedProvider.supportsApiKey ? "支持" : "不支持"}</dd></div>
@@ -250,13 +402,34 @@ export function ModelConfigurationWorkspace({
               <div><dt>来源</dt><dd>{selectedProvider.builtIn ? "Pi 内置" : "自定义"}</dd></div>
             </dl>
 
-            {selectedProvider.supportsApiKey && <section className="provider-key-panel">
-              <div><KeyRound size={14} /><span><strong>{selectedProvider.configured ? "替换 API key" : "连接 API key"}</strong><small>{selectedProvider.credentialType === "oauth" ? "保存新密钥将明确替换当前 OAuth 凭据；已有令牌不会回显。" : "已有值永不回显；新值只发送到 Electron 主进程。"}</small></span></div>
-              <label><input aria-label={`${selectedProvider.name} API key`} type={showApiKey ? "text" : "password"} autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="粘贴新的 API key" /><button type="button" aria-label={showApiKey ? "隐藏 API key" : "显示 API key"} onClick={() => setShowApiKey((current) => !current)}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></label>
-              <button type="button" className="button-primary" disabled={!apiKey.trim() || Boolean(busyAction)} onClick={() => void saveApiKey()}><ShieldCheck size={13} />{busyAction === "保存 API key" ? "保存并重载 Pi…" : "安全保存并应用"}</button>
-              {selectedProvider.credentialType && <button type="button" className="provider-key-panel__delete" disabled={Boolean(busyAction)} onClick={() => {
+            <section className={`provider-connection-test ${connectionResult?.ok ? "is-success" : connectionResult ? "is-error" : ""}`} aria-label={`${selectedProvider.name} 连通测试`} aria-busy={testingConnection}>
+              <header><Gauge size={14} /><span><strong>真实模型请求</strong><small id="provider-connection-cost-hint">独立发送极短请求，不写入聊天记录；可能产生少量 Token 费用。</small></span></header>
+              <div className="provider-connection-test__controls">
+                <label><span>测试模型</span><select aria-label="连接测试模型" value={effectiveTestModelId} disabled={testingConnection || testModels.length === 0} onChange={(event) => { setTestModelId(event.target.value); setConnectionResult(undefined); }}>
+                  {testModels.length === 0 && <option value="">使用 Pi 目录首个模型</option>}
+                  {testModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.id}</option>)}
+                </select></label>
+                <button type="button" className="button-secondary" aria-label={`测试 ${selectedProvider.name} 连通性`} aria-describedby="provider-connection-cost-hint" disabled={testingConnection || Boolean(busyAction)} onClick={() => void testConnection()}><RefreshCw size={13} className={testingConnection ? "spin" : ""} />{testingConnection ? "正在请求…" : "测试连通性"}</button>
+              </div>
+              <p className="provider-connection-test__hint">{apiKey.trim() ? "本次测试使用输入框中的新 Key，不会保存。" : "输入框为空：本次测试使用 Pi 当前解析到的凭据。"}</p>
+              {connectionResult && <div className={`provider-connection-result ${connectionResult.ok ? "is-success" : "is-error"}`} role={connectionResult.ok ? "status" : "alert"}>
+                <span>{connectionResult.ok ? <Check size={13} /> : <EyeOff size={13} />}</span>
+                <div><strong>{connectionResult.ok ? "连通已验证" : "测试未通过"}</strong><p>{connectionResult.message}</p><small>{connectionResult.modelId ?? "未选择模型"} · {connectionResult.latencyMs} ms · {new Date(connectionResult.checkedAt).toLocaleTimeString()}</small></div>
+              </div>}
+            </section>
+
+            {selectedProvider.supportsApiKey && <section className="provider-key-panel" aria-busy={revealingApiKey}>
+              <div><KeyRound size={14} /><span><strong>{selectedProvider.configured ? "查看或替换 API key" : "连接 API key"}</strong><small>{selectedProvider.credentialType === "oauth" ? "当前为 OAuth；访问令牌不会显示。输入新 Key 可先测试，再明确替换。" : "当前值只在点击查看后临时读取；动态 !command 不会因查看而执行。"}</small></span></div>
+              {selectedProvider.configured && selectedProvider.credentialType !== "oauth" && <div className="provider-saved-key">
+                <span><strong>当前凭据</strong><small>{revealedApiKey?.source ?? authSourceLabel(selectedProvider)} · 显示后 30 秒自动清除</small></span>
+                <label><input aria-label={`${selectedProvider.name} 当前 API key`} readOnly type={revealedApiKey ? "text" : "password"} autoComplete="off" value={revealedApiKey?.apiKey ?? ""} placeholder="已配置，点击查看" /></label>
+                <button type="button" className="button-secondary" aria-label={revealedApiKey ? "隐藏当前 API key" : "查看当前 API key"} disabled={revealingApiKey || testingConnection || Boolean(busyAction)} onClick={() => void revealCurrentApiKey()}>{revealedApiKey ? <EyeOff size={13} /> : <Eye size={13} />}{revealingApiKey ? "读取中…" : revealedApiKey ? "隐藏" : "查看"}</button>
+              </div>}
+              <label className="provider-key-panel__draft"><input aria-label={`${selectedProvider.name} API key`} type={showApiKey ? "text" : "password"} autoComplete="new-password" autoCapitalize="off" spellCheck={false} disabled={testingConnection} value={apiKey} onChange={(event) => { setApiKey(event.target.value); setConnectionResult(undefined); }} placeholder={selectedProvider.configured ? "粘贴新的 API key（不会覆盖当前值，直到保存）" : "粘贴新的 API key"} /><button type="button" aria-label={showApiKey ? "隐藏新 API key" : "显示新 API key"} disabled={!apiKey || testingConnection} onClick={() => setShowApiKey((current) => !current)}>{showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}</button></label>
+              <button type="button" className="button-primary" disabled={!apiKey.trim() || Boolean(busyAction) || testingConnection} onClick={() => void saveApiKey().catch(() => undefined)}><ShieldCheck size={13} />{busyAction === "保存 API key" ? "保存并重载 Pi…" : "安全保存并应用"}</button>
+              {selectedProvider.credentialType && <button type="button" className="provider-key-panel__delete" disabled={Boolean(busyAction) || testingConnection} onClick={() => {
                 if (!window.confirm(`确认清除 ${selectedProvider.name} 在 auth.json 中保存的凭据？`)) return;
-                void mutate("清除凭据", () => api.modelConfigurationDeleteCredential(selectedProvider.id), `${selectedProvider.name} 的已保存凭据已清除`);
+                void clearStoredCredential().catch(() => undefined);
               }}><Trash2 size={12} />清除已保存凭据</button>}
             </section>}
 
@@ -264,9 +437,9 @@ export function ModelConfigurationWorkspace({
 
             <section className="provider-console__custom">
               <div><Pencil size={13} /><span><strong>{customProvider ? "models.json 覆盖已启用" : "端点与模型覆盖"}</strong><small>{customProvider ? `${customProvider.models.length} 个自定义模型；高级字段会保留。` : "配置代理、Ollama、LM Studio、vLLM 或模型覆盖。"}</small></span></div>
-              <button type="button" className="button-secondary" onClick={() => setEditorState({ provider: customProvider, initialId: customProvider ? undefined : selectedProvider.id, builtIn: selectedProvider.builtIn })}>{customProvider ? "编辑配置" : "创建覆盖"}</button>
+              <button type="button" className="button-secondary" disabled={testingConnection || Boolean(busyAction)} onClick={() => setEditorState({ provider: customProvider, initialId: customProvider ? undefined : selectedProvider.id, builtIn: selectedProvider.builtIn })}>{customProvider ? "编辑配置" : "创建覆盖"}</button>
             </section>
-            <footer><ShieldCheck size={13} /><span>密钥写入 <code>auth.json</code>，权限限制为当前用户；页面和 IPC 返回值不包含密钥。</span></footer>
+            <footer><ShieldCheck size={13} /><span>初始化与刷新永不返回密钥；只有点击“查看”才通过独立 IPC 临时读取，切换 Provider、保存、隐藏或 30 秒后立即从页面清除。</span></footer>
           </> : <div className="provider-console__empty"><Cpu size={24} /><p>从左侧选择一个 Provider</p></div>}
         </aside>
       </div>

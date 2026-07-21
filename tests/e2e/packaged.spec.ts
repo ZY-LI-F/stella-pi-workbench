@@ -99,7 +99,15 @@ test("packaged app boots its bundled Pi RPC runtime", async ({}, testInfo) => {
 
     await window.getByRole("button", { name: "模型配置", exact: true }).click();
     await expect(window.getByRole("heading", { name: "模型配置", exact: true })).toBeVisible({ timeout: 30_000 });
-    await expect(window.getByRole("button", { name: /Packaged Smoke/ })).toBeVisible();
+    const packagedProvider = window.getByLabel("Provider 列表").getByRole("button", { name: /Packaged Smoke/ });
+    await expect(packagedProvider).toBeVisible();
+    await packagedProvider.click();
+    const currentKey = window.getByLabel("Packaged Smoke 当前 API key");
+    await expect(currentKey).not.toHaveValue("packaged-smoke-only");
+    await window.getByRole("button", { name: "查看当前 API key" }).click();
+    await expect(currentKey).toHaveValue("packaged-smoke-only");
+    await window.getByRole("button", { name: "隐藏当前 API key" }).click();
+    await expect(currentKey).not.toHaveValue("packaged-smoke-only");
     expect(await window.getByRole("dialog").allTextContents()).toEqual([]);
     await window.getByRole("button", { name: "任务看板", exact: true }).click();
 

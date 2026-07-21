@@ -12,7 +12,10 @@ import type { SkinArtworkDescriptor, SkinId } from "../shared/skin-artwork";
 import type {
   PiModelConfigurationProviderInput,
   PiModelConfigurationSnapshot,
+  PiApiKeyRevealResult,
+  PiModelConnectionTestResult,
   SavePiApiKeyInput,
+  TestPiModelConnectionInput,
 } from "../shared/model-configuration";
 import type {
   BoardBootstrap,
@@ -54,6 +57,10 @@ const api: StellaDesktopApi = Object.freeze({
   copyText: (value: string) => ipcRenderer.invoke("stella:copy-text", value) as Promise<void>,
   modelConfigurationInitialize: () =>
     ipcRenderer.invoke("stella:model-configuration:initialize") as Promise<PiModelConfigurationSnapshot>,
+  modelConfigurationRevealApiKey: (providerId: string) =>
+    ipcRenderer.invoke("stella:model-configuration:reveal-api-key", providerId) as Promise<PiApiKeyRevealResult>,
+  modelConfigurationTestConnection: (input: TestPiModelConnectionInput) =>
+    ipcRenderer.invoke("stella:model-configuration:test-connection", input) as Promise<PiModelConnectionTestResult>,
   modelConfigurationSaveApiKey: (input: SavePiApiKeyInput) =>
     ipcRenderer.invoke("stella:model-configuration:save-api-key", input) as Promise<PiModelConfigurationSnapshot>,
   modelConfigurationDeleteCredential: (providerId: string) =>

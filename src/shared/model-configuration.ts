@@ -55,6 +55,42 @@ export interface SavePiApiKeyInput {
   readonly apiKey: string;
 }
 
+export interface PiApiKeyRevealResult {
+  readonly providerId: string;
+  readonly apiKey: string;
+  readonly source?: string;
+}
+
+export interface TestPiModelConnectionInput {
+  readonly providerId: string;
+  readonly modelId?: string;
+  /** Tests this key in memory without saving it. Empty/omitted uses Pi's current credential. */
+  readonly apiKey?: string;
+}
+
+export type PiModelConnectionTestCode =
+  | "success"
+  | "authentication"
+  | "permission"
+  | "model"
+  | "quota"
+  | "network"
+  | "timeout"
+  | "provider"
+  | "unknown";
+
+export interface PiModelConnectionTestResult {
+  readonly ok: boolean;
+  readonly code: PiModelConnectionTestCode;
+  readonly providerId: string;
+  readonly modelId?: string;
+  readonly responseModel?: string;
+  readonly latencyMs: number;
+  readonly checkedAt: number;
+  /** Human-readable and secret-redacted; never contains response content or request headers. */
+  readonly message: string;
+}
+
 export interface PiModelConfigurationProviderInput {
   readonly id: string;
   readonly name?: string;

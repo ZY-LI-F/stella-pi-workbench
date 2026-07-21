@@ -2,14 +2,19 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   isCustomModelApi,
+  type PiApiKeyRevealResult,
   type PiCustomProviderConfiguration,
   type PiModelConfigurationModel,
   type PiModelConfigurationProviderInput,
   type PiModelConfigurationSnapshot,
+  type PiModelConnectionTestCode,
+  type PiModelConnectionTestResult,
   type PiModelProviderSummary,
   type SavePiApiKeyInput,
+  type TestPiModelConnectionInput,
 } from "../shared/model-configuration";
 
 interface ProperLockfile {
@@ -26,6 +31,9 @@ const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u;
 const RESERVED_PROVIDER_IDS = new Set(["constructor", "prototype", "__proto__"]);
 const FILE_MODE = 0o600;
 const DIRECTORY_MODE = 0o700;
+const CONNECTION_TEST_TIMEOUT_MS = 15_000;
+const CONNECTION_TEST_MAX_TOKENS = 8;
+const CONNECTION_ERROR_MAX_LENGTH = 360;
 
 type JsonObject = Record<string, unknown>;
 
@@ -52,10 +60,16 @@ export interface ModelConfigurationStorage {
   update(path: string, transform: (current: string) => string): Promise<void>;
 }
 
+export type ModelConfigurationRuntime = Pick<
+  ModelRuntime,
+  "getProvider" | "getModels" | "getModel" | "checkAuth" | "getAuth" | "listCredentials" | "completeSimple"
+>;
+
 interface ModelConfigurationServiceDependencies {
   readonly agentDir: string;
   readonly storage: ModelConfigurationStorage;
   readonly inspect: () => Promise<ModelCatalogInspection>;
+  readonly runtimeFactory?: () => Promise<ModelConfigurationRuntime>;
 }
 
 function errorMessage(cause: unknown): string {
@@ -89,6 +103,93 @@ function optionalTrimmed(value: unknown, label: string): string | undefined {
   if (typeof value !== "string") throw new Error(`${label} 必须是字符串`);
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function normalizedConnectionTestInput(value: TestPiModelConnectionInput): TestPiModelConnectionInput {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("连接测试配置必须是对象");
+  }
+  if (value.apiKey !== undefined && typeof value.apiKey !== "string") {
+    throw new Error("API key 必须是字符串");
+  }
+  const apiKey = typeof value.apiKey === "string" && value.apiKey.trim() ? value.apiKey : undefined;
+  return Object.freeze({
+    providerId: requiredIdentifier(value.providerId, "Provider ID"),
+    modelId: optionalTrimmed(value.modelId, "模型 ID"),
+    apiKey,
+  });
+}
+
+function redactedConnectionError(cause: unknown, secrets: readonly string[] = []): string {
+  let message = errorMessage(cause).replace(/[\r\n]+/gu, " ").trim();
+  for (const secret of secrets) {
+    if (secret) message = message.split(secret).join("[REDACTED]");
+  }
+  message = message
+    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/giu, "$1[REDACTED]")
+    .replace(/((?:api[-_ ]?key|x-api-key)(?:\s+(?:provided|value))?\s*[:=]\s*)[^\s,;]+/giu, "$1[REDACTED]")
+    .replace(/([?&](?:key|api_key)=)[^&\s]+/giu, "$1[REDACTED]")
+    .replace(/\b(?:sk-(?:ant-)?|xai-|AIza)[a-zA-Z0-9._-]{6,}\b/gu, "[REDACTED]");
+  return (message || "未知错误").slice(0, CONNECTION_ERROR_MAX_LENGTH);
+}
+
+function errorDiagnostic(cause: unknown, depth = 0): string {
+  if (depth > 3) return "";
+  const parts = [errorMessage(cause)];
+  if (typeof cause !== "object" || cause === null) return parts.join(" ");
+  const record = cause as Readonly<Record<string, unknown>>;
+  for (const key of ["name", "code", "status", "statusCode", "type"] as const) {
+    const value = record[key];
+    if (typeof value === "string" || typeof value === "number") parts.push(`${key}:${String(value)}`);
+  }
+  if (record.cause !== undefined && record.cause !== cause) parts.push(errorDiagnostic(record.cause, depth + 1));
+  return parts.join(" ");
+}
+
+function connectionFailure(
+  cause: unknown,
+  secrets: readonly string[],
+  timedOut: boolean,
+): Readonly<{ code: PiModelConnectionTestCode; message: string }> {
+  // The detailed Provider response is deliberately used only for classification.
+  // Compatible endpoints are untrusted and may echo credentials in arbitrary formats.
+  const detail = redactedConnectionError(errorDiagnostic(cause), secrets).toLocaleLowerCase();
+  if (timedOut || /\babort(?:ed)?\b|timeout|timed out/u.test(detail)) {
+    return Object.freeze({ code: "timeout", message: `连接测试超过 ${CONNECTION_TEST_TIMEOUT_MS / 1000} 秒，请检查网络、代理或端点响应速度。` });
+  }
+  if (/\b(?:auth|oauth)\b|\b401\b|unauthori[sz]ed|invalid (?:api )?key|api key auth failed|authentication failed|not configured/u.test(detail)) {
+    return Object.freeze({ code: "authentication", message: "鉴权失败：API Key、OAuth 登录或凭据来源无效。" });
+  }
+  if (/\b403\b|forbidden|permission denied|access denied/u.test(detail)) {
+    return Object.freeze({ code: "permission", message: "服务已响应，但当前凭据没有访问该模型的权限（403）。" });
+  }
+  if (/\b404\b|model[^.]{0,40}not found|unknown model|does not exist/u.test(detail)) {
+    return Object.freeze({ code: "model", message: "服务已响应，但端点路径或所选模型不存在（404）。" });
+  }
+  if (/\b429\b|rate.?limit|quota|insufficient_quota|billing/u.test(detail)) {
+    return Object.freeze({ code: "quota", message: "服务已响应，但账户额度不足、计费未启用或当前正在限流（429）。" });
+  }
+  if (/enotfound|eai_again|getaddrinfo|econnrefused|econnreset|network|fetch failed|socket|tls|certificate/u.test(detail)) {
+    return Object.freeze({ code: "network", message: "无法到达 Provider，请检查 Base URL、网络、代理、DNS 与 TLS 配置。" });
+  }
+  if (/\bprovider\b|unknown provider/u.test(detail)) {
+    return Object.freeze({ code: "provider", message: "Provider 配置无效或当前运行时无法加载该 Provider。" });
+  }
+  return Object.freeze({
+    code: "unknown",
+    message: "模型请求失败；Provider 错误正文因可能包含凭据而未直接显示。",
+  });
+}
+
+function isCredentialCommand(value: unknown): boolean {
+  return typeof value === "string" && value.trimStart().startsWith("!");
+}
+
+function containsCredentialCommand(value: unknown): boolean {
+  if (isCredentialCommand(value)) return true;
+  if (Array.isArray(value)) return value.some(containsCredentialCommand);
+  if (typeof value !== "object" || value === null) return false;
+  return Object.values(value).some(containsCredentialCommand);
 }
 
 function requiredIdentifier(value: unknown, label: string): string {
@@ -276,6 +377,7 @@ export class ModelConfigurationService {
   readonly #authPath: string;
   readonly #storage: ModelConfigurationStorage;
   readonly #inspect: () => Promise<ModelCatalogInspection>;
+  readonly #runtimeFactory: () => Promise<ModelConfigurationRuntime>;
 
   constructor(dependencies: ModelConfigurationServiceDependencies) {
     this.#agentDir = resolve(dependencies.agentDir);
@@ -283,6 +385,36 @@ export class ModelConfigurationService {
     this.#authPath = join(this.#agentDir, "auth.json");
     this.#storage = dependencies.storage;
     this.#inspect = dependencies.inspect;
+    this.#runtimeFactory = dependencies.runtimeFactory ?? (() => ModelRuntime.create({
+      authPath: this.#authPath,
+      modelsPath: this.#modelsPath,
+      allowModelNetwork: false,
+    }));
+  }
+
+  async #hasCredentialCommand(providerId: string): Promise<boolean> {
+    const [authContents, modelsContents] = await Promise.all([
+      this.#storage.read(this.#authPath),
+      this.#storage.read(this.#modelsPath),
+    ]);
+    const auth = parseJsonObject(authContents, this.#authPath, {});
+    const stored = auth[providerId];
+    if (typeof stored === "object" && stored !== null && !Array.isArray(stored)) {
+      const credential = stored as JsonObject;
+      if (credential.type === "api_key" && isCredentialCommand(credential.key)) return true;
+    }
+
+    const models = parseJsonObject(modelsContents, this.#modelsPath, { providers: {} });
+    const providers = models.providers === undefined ? {} : plainObject(models.providers, `${this.#modelsPath}.providers`);
+    const configured = providers[providerId];
+    if (typeof configured !== "object" || configured === null || Array.isArray(configured)) return false;
+    const provider = configured as JsonObject;
+    if (containsCredentialCommand(provider.apiKey) || containsCredentialCommand(provider.headers)) return true;
+    if (!Array.isArray(provider.models)) return false;
+    return provider.models.some((model) => {
+      if (typeof model !== "object" || model === null || Array.isArray(model)) return false;
+      return containsCredentialCommand((model as JsonObject).headers);
+    });
   }
 
   async snapshot(): Promise<PiModelConfigurationSnapshot> {
@@ -337,6 +469,142 @@ export class ModelConfigurationService {
         : { type: "api_key", key: value.apiKey, env: currentEnv };
       return serialized(root);
     });
+  }
+
+  async revealApiKey(providerIdValue: unknown): Promise<PiApiKeyRevealResult> {
+    const providerId = requiredIdentifier(providerIdValue, "Provider ID");
+    let runtime: ModelConfigurationRuntime;
+    try {
+      runtime = await this.#runtimeFactory();
+    } catch {
+      throw new Error("无法加载 Pi 凭据配置；请修复 models.json 或 auth.json 后重试");
+    }
+    const provider = runtime.getProvider(providerId);
+    if (!provider) throw new Error(`Provider 不存在: ${providerId}`);
+    if (!provider.auth.apiKey) throw new Error(`${provider.name} 不使用 API Key 凭据`);
+
+    let authCheck: Awaited<ReturnType<ModelConfigurationRuntime["checkAuth"]>>;
+    let credentials: Awaited<ReturnType<ModelConfigurationRuntime["listCredentials"]>>;
+    try {
+      [authCheck, credentials] = await Promise.all([
+        runtime.checkAuth(providerId),
+        runtime.listCredentials(),
+      ]);
+    } catch {
+      throw new Error(`无法读取 ${provider.name} 的凭据状态；请检查 Pi 凭据配置`);
+    }
+    const storedCredential = credentials.find((credential) => credential.providerId === providerId);
+    if (storedCredential?.type === "oauth" || (!storedCredential && authCheck?.type === "oauth")) {
+      throw new Error(`${provider.name} 当前使用 OAuth；为保护账户安全，不显示访问令牌`);
+    }
+    let hasCredentialCommand: boolean;
+    try {
+      hasCredentialCommand = await this.#hasCredentialCommand(providerId);
+    } catch {
+      throw new Error(`无法检查 ${provider.name} 的动态凭据配置；请检查 models.json 或 auth.json`);
+    }
+    if (hasCredentialCommand) {
+      throw new Error(`动态命令凭据不能在本页显示；“查看”不会执行 ${provider.name} 配置中的 !command，可使用连接测试验证该凭据`);
+    }
+
+    let resolution: Awaited<ReturnType<ModelConfigurationRuntime["getAuth"]>>;
+    try {
+      resolution = await runtime.getAuth(providerId);
+    } catch {
+      throw new Error(`无法解析 ${provider.name} 的 API Key；请检查凭据来源是否可读`);
+    }
+    const apiKey = resolution?.auth.apiKey;
+    if (typeof apiKey !== "string" || apiKey.length === 0) {
+      throw new Error(`${provider.name} 当前没有可显示的单一 API Key；它可能使用组合凭据或无密钥认证`);
+    }
+    return Object.freeze({
+      providerId,
+      apiKey,
+      source: resolution?.source,
+    });
+  }
+
+  async testConnection(value: TestPiModelConnectionInput): Promise<PiModelConnectionTestResult> {
+    const input = normalizedConnectionTestInput(value);
+    const startedAt = Date.now();
+    let modelId = input.modelId;
+    const failure = (
+      code: PiModelConnectionTestCode,
+      message: string,
+    ): PiModelConnectionTestResult => Object.freeze({
+      ok: false,
+      code,
+      providerId: input.providerId,
+      modelId,
+      latencyMs: Math.max(0, Date.now() - startedAt),
+      checkedAt: Date.now(),
+      message,
+    });
+
+    let runtime: ModelConfigurationRuntime;
+    try {
+      runtime = await this.#runtimeFactory();
+    } catch (cause) {
+      const result = connectionFailure(cause, input.apiKey ? [input.apiKey] : [], false);
+      return failure(result.code, result.message);
+    }
+
+    const provider = runtime.getProvider(input.providerId);
+    if (!provider) return failure("provider", `Provider 不存在: ${input.providerId}`);
+    const model = input.modelId
+      ? runtime.getModel(input.providerId, input.modelId)
+      : runtime.getModels(input.providerId)[0];
+    if (!model) {
+      return failure(
+        "model",
+        input.modelId
+          ? `Provider ${provider.name} 中不存在模型 ${input.modelId}`
+          : `Provider ${provider.name} 没有可用于测试的模型`,
+      );
+    }
+    modelId = model.id;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CONNECTION_TEST_TIMEOUT_MS);
+    timeout.unref();
+    try {
+      const response = await runtime.completeSimple(
+        model,
+        {
+          messages: [{ role: "user", content: "Reply only with OK.", timestamp: Date.now() }],
+        },
+        {
+          apiKey: input.apiKey,
+          maxTokens: CONNECTION_TEST_MAX_TOKENS,
+          maxRetries: 0,
+          timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
+          signal: controller.signal,
+        },
+      );
+      if (response.stopReason === "error" || response.stopReason === "aborted") {
+        const result = connectionFailure(
+          new Error(response.errorMessage || `模型请求以 ${response.stopReason} 结束`),
+          input.apiKey ? [input.apiKey] : [],
+          controller.signal.aborted,
+        );
+        return failure(result.code, result.message);
+      }
+      return Object.freeze({
+        ok: true,
+        code: "success",
+        providerId: input.providerId,
+        modelId: model.id,
+        responseModel: response.responseModel,
+        latencyMs: Math.max(0, Date.now() - startedAt),
+        checkedAt: Date.now(),
+        message: "最小模型请求已成功返回。",
+      });
+    } catch (cause) {
+      const result = connectionFailure(cause, input.apiKey ? [input.apiKey] : [], controller.signal.aborted);
+      return failure(result.code, result.message);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async deleteCredential(providerIdValue: unknown): Promise<void> {

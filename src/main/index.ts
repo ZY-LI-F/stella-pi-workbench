@@ -18,6 +18,7 @@ import {
   protocol,
   shell,
 } from "electron";
+import type { IpcMainInvokeEvent } from "electron";
 import type {
   ModelSummary,
   PiCommand,
@@ -136,6 +137,17 @@ const PI_COMMAND_TYPES = new Set<string>([
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} 必须是非空字符串`);
   return value;
+}
+
+function assertMainWindowFrame(event: IpcMainInvokeEvent): void {
+  if (
+    !mainWindow
+    || mainWindow.isDestroyed()
+    || event.sender !== mainWindow.webContents
+    || event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
+    throw new Error("该敏感操作只能由 Stella 主窗口发起");
+  }
 }
 
 function validatedCommand(value: unknown): PiCommand {
@@ -1193,6 +1205,14 @@ function registerIpcHandlers(): void {
     clipboard.writeText(textValue(value, "待复制文本"));
   });
   ipcMain.handle("stella:model-configuration:initialize", () => modelConfigurationService.snapshot());
+  ipcMain.handle("stella:model-configuration:reveal-api-key", (event, providerId: unknown) => {
+    assertMainWindowFrame(event);
+    return modelConfigurationService.revealApiKey(providerId);
+  });
+  ipcMain.handle("stella:model-configuration:test-connection", (event, input: unknown) => {
+    assertMainWindowFrame(event);
+    return modelConfigurationService.testConnection(input as Parameters<ModelConfigurationService["testConnection"]>[0]);
+  });
   ipcMain.handle("stella:model-configuration:save-api-key", (_event, input: unknown) =>
     mutateModelConfiguration(() => modelConfigurationService.saveApiKey(input as Parameters<ModelConfigurationService["saveApiKey"]>[0])),
   );
