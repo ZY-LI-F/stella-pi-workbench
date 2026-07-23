@@ -15,7 +15,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import type { CapabilityHealthSnapshot, CapabilityName } from "@shared/capabilities";
-import type { ModelSummary, RecentProject, RuntimeBootstrap, SessionSummary } from "@shared/contracts";
+import type { ModelSummary, RecentProject, RuntimeBootstrap, SerializableContentBlock, SerializableMessage, SessionSummary } from "@shared/contracts";
 import type { SkinPreference } from "../lib/skins";
 import { Brand } from "./Brand";
 import { GlobalModelControl } from "./GlobalModelControl";
@@ -61,6 +61,33 @@ function relativeGroup(dateString: string): "今天" | "过去 7 天" | "更早"
 
 function sessionTitle(session: SessionSummary): string {
   return session.name?.trim() || session.firstMessage.trim() || "未命名会话";
+}
+
+function messageText(message: SerializableMessage): string {
+  if (!("content" in message)) return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  return content
+    .filter((block): block is Extract<SerializableContentBlock, { readonly type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join(" ")
+    .trim();
+}
+
+function visibleSidebarSessions(bootstrap: RuntimeBootstrap | undefined): readonly SessionSummary[] {
+  if (!bootstrap?.state.sessionFile) return bootstrap?.sessions ?? [];
+  const current: SessionSummary = Object.freeze({
+    path: bootstrap.state.sessionFile,
+    id: bootstrap.state.sessionId,
+    cwd: bootstrap.project.cwd,
+    name: bootstrap.state.sessionName,
+    created: bootstrap.sessions.find((session) => session.path === bootstrap.state.sessionFile)?.created ?? new Date().toISOString(),
+    modified: new Date().toISOString(),
+    messageCount: bootstrap.state.messageCount,
+    firstMessage: bootstrap.messages.map(messageText).find((text) => text.length > 0) ?? "",
+  });
+  const withoutCurrent = bootstrap.sessions.filter((session) => session.path !== current.path);
+  return Object.freeze([current, ...withoutCurrent]);
 }
 
 function SessionGroup({
@@ -120,8 +147,9 @@ export function Sidebar({
 }: SidebarProps) {
   const [query, setQuery] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const sessions = useMemo(() => visibleSidebarSessions(bootstrap), [bootstrap]);
   const groups = useMemo(() => {
-    const filtered = (bootstrap?.sessions ?? []).filter((session) =>
+    const filtered = sessions.filter((session) =>
       `${sessionTitle(session)} ${session.firstMessage}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
     );
     return {
@@ -129,7 +157,7 @@ export function Sidebar({
       "过去 7 天": filtered.filter((session) => relativeGroup(session.modified) === "过去 7 天"),
       更早: filtered.filter((session) => relativeGroup(session.modified) === "更早"),
     };
-  }, [bootstrap?.sessions, query]);
+  }, [query, sessions]);
   const taskReady = capabilities?.task.state === "ready";
   const piReady = capabilities?.pi.state === "ready" && Boolean(bootstrap);
   const taskSurface = activeView === "kanban" || activeView === "team";
@@ -247,7 +275,7 @@ export function Sidebar({
             <SessionGroup label="今天" sessions={groups["今天"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
             <SessionGroup label="过去 7 天" sessions={groups["过去 7 天"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
             <SessionGroup label="更早" sessions={groups["更早"]} activePath={bootstrap.state.sessionFile} onSwitch={onSwitchSession} />
-            {bootstrap.sessions.length === 0 && (
+            {sessions.length === 0 && (
               <div className="sidebar-empty"><Command size={19} /><p>这个项目还没有会话。</p></div>
             )}
           </div>

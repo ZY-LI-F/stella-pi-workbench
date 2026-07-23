@@ -47,12 +47,13 @@ afterEach(() => {
   document.documentElement.removeAttribute("data-skin");
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.removeAttribute("data-density");
+  document.documentElement.removeAttribute("data-font-size");
 });
 
 describe("preferences", () => {
   it("parses every supported skin and rejects unknown values", () => {
     for (const skin of ["stella", "chenxi", "dingyang", "xuri", "yuehua", "kuroshitsuji", "jojo", "qihun"] as const) {
-      expect(parsePreferences(JSON.stringify({ ...LEGACY_PREFERENCES, skin })).skin).toBe(skin);
+      expect(parsePreferences(JSON.stringify({ ...LEGACY_PREFERENCES, skin }))).toMatchObject({ skin, fontSize: "default" });
     }
     expect(() => parsePreferences(JSON.stringify({ ...LEGACY_PREFERENCES, skin: "unknown" }))).toThrow(
       `本地偏好 ${PREFERENCES_STORAGE_KEY} 格式无效`,
@@ -69,6 +70,7 @@ describe("preferences", () => {
     expect(JSON.parse(localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? "null")).toEqual({
       ...LEGACY_PREFERENCES,
       skin: "stella",
+      fontSize: "default",
     });
 
     await user.click(screen.getByRole("button", { name: "stella" }));

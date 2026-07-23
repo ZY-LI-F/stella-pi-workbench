@@ -318,6 +318,7 @@ export function App({ api }: AppProps) {
       state.streaming
         ? { type: "prompt", message, images: payloadImages, streamingBehavior: queueMode }
         : { type: "prompt", message, images: payloadImages },
+      true,
     );
   };
 

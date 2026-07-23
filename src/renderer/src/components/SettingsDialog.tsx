@@ -1,7 +1,7 @@
 import { Check, ExternalLink, ImagePlus, Keyboard, Monitor, Moon, RotateCcw, ShieldCheck, ShieldOff, Sun } from "lucide-react";
 import type { RuntimeBootstrap } from "@shared/contracts";
 import type { SkinArtworkBySkin, SkinId } from "@shared/skin-artwork";
-import type { Preferences, ThemePreference } from "../hooks/use-preferences";
+import type { FontSizePreference, Preferences, ThemePreference } from "../hooks/use-preferences";
 import { SKIN_OPTIONS, skinDefinition } from "../lib/skins";
 import { Modal } from "./Modal";
 
@@ -25,6 +25,12 @@ const THEMES: readonly { readonly value: ThemePreference; readonly label: string
   Object.freeze({ value: "light", label: "月白", icon: Sun }),
   Object.freeze({ value: "dark", label: "星夜", icon: Moon }),
   Object.freeze({ value: "system", label: "跟随系统", icon: Monitor }),
+]);
+
+const FONT_SIZES: readonly { readonly value: FontSizePreference; readonly label: string }[] = Object.freeze([
+  Object.freeze({ value: "small", label: "小" }),
+  Object.freeze({ value: "default", label: "默认" }),
+  Object.freeze({ value: "large", label: "大" }),
 ]);
 
 function Toggle({ checked, onChange, label }: { readonly checked: boolean; readonly onChange: (checked: boolean) => void; readonly label: string }) {
@@ -113,6 +119,7 @@ export function SettingsDialog({
             ))}
           </div>
           <div className="setting-row"><span><strong>紧凑密度</strong><small>减少消息与侧栏的垂直留白</small></span><Toggle label="紧凑密度" checked={preferences.density === "compact"} onChange={(checked) => onPreferencesChange(Object.freeze({ ...preferences, density: checked ? "compact" : "comfortable" }))} /></div>
+          <label className="setting-row setting-row--select"><span><strong>字体大小</strong><small>调整全局界面字号，当前为{FONT_SIZES.find((item) => item.value === preferences.fontSize)?.label ?? "默认"}</small></span><select value={preferences.fontSize} onChange={(event) => onPreferencesChange(Object.freeze({ ...preferences, fontSize: event.target.value as FontSizePreference }))}>{FONT_SIZES.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
         </section>
 
         <section className="settings-section">

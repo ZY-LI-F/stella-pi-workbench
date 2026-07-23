@@ -614,6 +614,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+:root[data-font-size="small"] body { font-size: 13px; }
+:root[data-font-size="large"] body { font-size: 16px; }
+
 button,
 input,
 textarea,

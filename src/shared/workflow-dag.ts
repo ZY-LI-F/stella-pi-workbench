@@ -61,7 +61,7 @@ export function projectWorkflowDag(run: WorkflowRun): WorkflowDagProjection {
       objective,
       status: stepRun?.status ?? "pending",
       agent: agentForStep(run, step),
-      artifact: stepRun?.artifact,
+      artifact: stepRun?.artifact ? Object.freeze({ ...stepRun.artifact, startedAt: stepRun.startedAt, completedAt: stepRun.completedAt }) : undefined,
       error: stepRun?.error,
       sessionPath: stepRun?.sessionPath ?? stepRun?.artifact?.sessionPath,
     });

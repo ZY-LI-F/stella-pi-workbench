@@ -4,11 +4,13 @@ import type { SkinPreference } from "../lib/skins";
 
 export type ThemePreference = "system" | "dark" | "light";
 export type DensityPreference = "comfortable" | "compact";
+export type FontSizePreference = "small" | "default" | "large";
 
 export interface Preferences {
   readonly skin: SkinPreference;
   readonly theme: ThemePreference;
   readonly density: DensityPreference;
+  readonly fontSize: FontSizePreference;
   readonly autoRetry: boolean;
   readonly defaultQueueMode: "steer" | "followUp";
 }
@@ -19,23 +21,31 @@ export const DEFAULT_PREFERENCES: Preferences = Object.freeze({
   skin: "stella",
   theme: "dark",
   density: "comfortable",
+  fontSize: "default",
   autoRetry: true,
   defaultQueueMode: "steer",
 });
 
-function isPreferences(value: unknown): value is Preferences {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+function normalizePreferences(value: unknown): Preferences | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  return (
-    isSkinId(record.skin) &&
-    (record.theme === "system" || record.theme === "dark" || record.theme === "light") &&
-    (record.density === "comfortable" || record.density === "compact") &&
-    typeof record.autoRetry === "boolean" &&
-    (record.defaultQueueMode === "steer" || record.defaultQueueMode === "followUp")
-  );
+  if (!isSkinId(record.skin)) return undefined;
+  if (record.theme !== "system" && record.theme !== "dark" && record.theme !== "light") return undefined;
+  if (record.density !== "comfortable" && record.density !== "compact") return undefined;
+  if (record.fontSize !== undefined && record.fontSize !== "small" && record.fontSize !== "default" && record.fontSize !== "large") return undefined;
+  if (typeof record.autoRetry !== "boolean") return undefined;
+  if (record.defaultQueueMode !== "steer" && record.defaultQueueMode !== "followUp") return undefined;
+  return Object.freeze({
+    skin: record.skin,
+    theme: record.theme,
+    density: record.density,
+    fontSize: record.fontSize ?? DEFAULT_PREFERENCES.fontSize,
+    autoRetry: record.autoRetry,
+    defaultQueueMode: record.defaultQueueMode,
+  });
 }
 
-type LegacyPreferences = Omit<Preferences, "skin">;
+type LegacyPreferences = Omit<Preferences, "skin" | "fontSize">;
 
 function isLegacyPreferences(value: unknown): value is LegacyPreferences {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -60,8 +70,9 @@ function storageFailure(action: string, cause: unknown): string {
 
 export function parsePreferences(raw: string, storageKey = PREFERENCES_STORAGE_KEY): Preferences {
   const parsed = JSON.parse(raw) as unknown;
-  if (!isPreferences(parsed)) throw new Error(`本地偏好 ${storageKey} 格式无效`);
-  return Object.freeze({ ...parsed });
+  const preferences = normalizePreferences(parsed);
+  if (!preferences) throw new Error(`本地偏好 ${storageKey} 格式无效`);
+  return preferences;
 }
 
 function loadPreferences(): LoadedPreferences {
@@ -101,7 +112,7 @@ function loadPreferences(): LoadedPreferences {
   try {
     const legacy = JSON.parse(legacyStored) as unknown;
     if (!isLegacyPreferences(legacy)) throw new Error(`本地偏好 ${LEGACY_PREFERENCES_STORAGE_KEY} 格式无效`);
-    migrated = Object.freeze({ ...legacy, skin: "stella" as const });
+    migrated = Object.freeze({ ...legacy, skin: "stella" as const, fontSize: DEFAULT_PREFERENCES.fontSize });
   } catch (cause) {
     return Object.freeze({
       preferences: DEFAULT_PREFERENCES,
@@ -131,12 +142,13 @@ export function usePreferences(): readonly [Preferences, (next: Preferences) => 
     const applyTheme = () => {
       root.dataset.theme = preferences.theme === "system" ? (media.matches ? "dark" : "light") : preferences.theme;
       root.dataset.density = preferences.density;
+      root.dataset.fontSize = preferences.fontSize;
       root.dataset.skin = preferences.skin;
     };
     applyTheme();
     media.addEventListener("change", applyTheme);
     return () => media.removeEventListener("change", applyTheme);
-  }, [preferences.density, preferences.skin, preferences.theme]);
+  }, [preferences.density, preferences.fontSize, preferences.skin, preferences.theme]);
 
   const setPreferences = (next: Preferences) => {
     const frozen = Object.freeze({ ...next });

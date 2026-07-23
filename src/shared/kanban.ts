@@ -150,6 +150,8 @@ export interface AgentArtifact {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly cost?: number;
+  readonly startedAt?: string;
+  readonly completedAt?: string;
 }
 
 export interface StepRun {
@@ -649,6 +651,8 @@ function assertArtifact(value: unknown, path: string): asserts value is AgentArt
   assertString(value.title, `${path}.title`);
   assertString(value.content, `${path}.content`, true);
   assertOptionalString(value.sessionPath, `${path}.sessionPath`);
+  assertOptionalIsoDate(value.startedAt, `${path}.startedAt`);
+  assertOptionalIsoDate(value.completedAt, `${path}.completedAt`);
   for (const key of ["inputTokens", "outputTokens", "cost"] as const) assertOptionalFiniteNumber(value[key], `${path}.${key}`);
 }
 
